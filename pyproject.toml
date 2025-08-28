@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.12",
+    "graphql-core>=3.2.6",
     "mcp[cli]>=1.9.3",
+    "openai>=1.102.0",
     "python-dotenv>=1.1.0",
     "tavily-python>=0.7.7",
 ]

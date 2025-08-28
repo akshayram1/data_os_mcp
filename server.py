@@ -167,6 +167,81 @@ def execute_graphql(
 
 
 @mcp.tool()
+def execute_load_query(query: dict) -> Dict[str, Any]:
+    """
+    Execute a query against the configured Lens /load endpoint.
+    Args:
+        query: Query object with dimensions, measures, filters, and limit
+              Example: {
+                  "dimensions": ["table.dimension_name"],
+                  "measures": ["table.measure_name"],
+                  "filters": [{"and": [{"member": "table.dimension_name", "operator": "equals", "values": ["value"]}]}],
+                  "limit": 100
+              }
+    Returns:
+        Parsed JSON response or error
+    """
+    lens_url, secret = _get_configured_credentials()
+    if not lens_url or not secret:
+        return {"error": "DataOS not configured. Please call configure_dataos() first with your credentials."}
+    
+    try:
+        import requests
+        import json
+        
+        # Convert query dict to JSON string
+        query_json = json.dumps(query)
+        
+        # Build the load URL with query parameter
+        load_url = f"{lens_url}/load"
+        
+        # Get auth type from session config
+        auth_type = _session_config.get("auth_header_type", "apikey")
+        if auth_type == "bearer":
+            headers = {"Authorization": f"Bearer {secret}"}
+        else:
+            headers = {"apikey": secret}
+        
+        # Add content type for JSON
+        headers["Content-Type"] = "application/json"
+        
+        # Make the request with query as URL parameter
+        params = {"query": query_json}
+        response = requests.get(load_url, headers=headers, params=params, timeout=120)
+        
+        print("Requesting URL:", load_url)
+        print("Query params:", params)
+        print("Using headers:", {k: v if k != "Authorization" else "***" for k, v in headers.items()})
+        print("Response code:", response.status_code)
+        print("Response body:", response.text[:500])
+        
+        if response.status_code != 200:
+            return {"error": f"HTTP {response.status_code}: {response.text[:200]}"}
+        
+        data = response.json()
+        return {"success": True, "data": data}
+        
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def get_connection_status() -> Dict[str, Any]:
+    """Check if DataOS credentials are configured and working."""
+    lens_url, secret = _get_configured_credentials()
+    if not lens_url or not secret:
+        return {
+            "configured": False,
+            "message": "No credentials configured"
+        }
+    return {
+        "configured": True,
+        "lens_url": lens_url,
+        "message": "Credentials are configured"
+    }
+
+
+@mcp.tool()
 def list_tools() -> Dict[str, Any]:
     """
     List available MCP tools and short descriptions.
