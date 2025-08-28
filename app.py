@@ -1,6 +1,8 @@
 import os
 import json
 import time
+import re
+import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -37,6 +39,10 @@ if "oai_tools" not in st.session_state:
     st.session_state.oai_tools = None  # OpenAI tool spec list
 if "raw_tools" not in st.session_state:
     st.session_state.raw_tools = []  # MCP tools list
+if "last_data" not in st.session_state:
+    st.session_state.last_data = None  # Store last retrieved data for visualization
+if "pending_chart" not in st.session_state:
+    st.session_state.pending_chart = False  # Flag to indicate user wants a chart
 
 def _json_schema_or_default(schema):
     # Ensure a valid JSON schema object for OpenAI function parameters
@@ -109,6 +115,155 @@ def validate_load_query_args(args):
     
     return {"query": fixed_query}
 
+def parse_table_from_text(text):
+    """
+    Parse markdown table from assistant response and convert to DataFrame.
+    """
+    try:
+        # Find markdown table pattern
+        table_pattern = r'\|.*\|[\r\n]+\|.*\|[\r\n]+(?:\|.*\|[\r\n]+)+'
+        table_match = re.search(table_pattern, text)
+        
+        if not table_match:
+            return None
+            
+        table_text = table_match.group(0)
+        lines = [line.strip() for line in table_text.split('\n') if line.strip()]
+        
+        if len(lines) < 3:  # Header, separator, at least one data row
+            return None
+            
+        # Parse header
+        header = [col.strip() for col in lines[0].split('|')[1:-1]]
+        
+        # Parse data rows (skip separator line)
+        data = []
+        for line in lines[2:]:
+            row = [col.strip() for col in line.split('|')[1:-1]]
+            if len(row) == len(header):
+                data.append(row)
+        
+        if not data:
+            return None
+            
+        df = pd.DataFrame(data, columns=header)
+        
+        # Try to convert numeric columns
+        for col in df.columns:
+            # Check if column contains currency values
+            if df[col].astype(str).str.contains(r'[\$,]').any():
+                df[col] = df[col].astype(str).str.replace(r'[\$,]', '', regex=True)
+            
+            # Try to convert to numeric
+            try:
+                df[col] = pd.to_numeric(df[col])
+            except (ValueError, TypeError):
+                # Try to parse dates
+                try:
+                    df[col] = pd.to_datetime(df[col])
+                except:
+                    pass  # Keep as string
+        
+        return df
+        
+    except Exception as e:
+        st.error(f"Error parsing table: {e}")
+        return None
+
+def create_chart(df, chart_type="auto"):
+    """
+    Create a chart based on the DataFrame and chart type.
+    """
+    if df is None or df.empty:
+        st.warning("No data available for visualization")
+        return
+    
+    try:
+        # Auto-detect chart type based on data
+        if chart_type == "auto":
+            # If we have datetime column, use line chart
+            datetime_cols = df.select_dtypes(include=['datetime64']).columns
+            numeric_cols = df.select_dtypes(include=['number']).columns
+            
+            if len(datetime_cols) > 0 and len(numeric_cols) > 0:
+                chart_type = "line"
+            elif len(numeric_cols) >= 1:
+                chart_type = "bar"
+            else:
+                chart_type = "bar"
+        
+        st.subheader("📊 Data Visualization")
+        
+        # Create the appropriate chart
+        if chart_type == "line":
+            # For line charts, use the first datetime/text column as x-axis
+            datetime_cols = df.select_dtypes(include=['datetime64']).columns
+            if len(datetime_cols) > 0:
+                x_col = datetime_cols[0]
+            else:
+                x_col = df.columns[0]
+            
+            numeric_cols = df.select_dtypes(include=['number']).columns
+            if len(numeric_cols) > 0:
+                chart_data = df.set_index(x_col)[numeric_cols]
+                st.line_chart(chart_data)
+            else:
+                st.warning("No numeric data found for line chart")
+                
+        elif chart_type == "bar":
+            # For bar charts, use first column as categories
+            numeric_cols = df.select_dtypes(include=['number']).columns
+            if len(numeric_cols) > 0:
+                if len(df.columns) > 1:
+                    chart_data = df.set_index(df.columns[0])[numeric_cols]
+                else:
+                    chart_data = df[numeric_cols]
+                st.bar_chart(chart_data)
+            else:
+                st.warning("No numeric data found for bar chart")
+                
+        elif chart_type == "pie":
+            # For pie charts, need exactly 2 columns (labels and values)
+            if len(df.columns) >= 2:
+                numeric_col = df.select_dtypes(include=['number']).columns[0]
+                label_col = df.columns[0] if df.columns[0] != numeric_col else df.columns[1]
+                
+                import plotly.express as px
+                fig = px.pie(df, values=numeric_col, names=label_col)
+                st.plotly_chart(fig)
+            else:
+                st.warning("Pie chart needs at least 2 columns (categories and values)")
+                
+        # Show the underlying data
+        with st.expander("📋 View Raw Data"):
+            st.dataframe(df)
+            
+    except Exception as e:
+        st.error(f"Error creating chart: {e}")
+        st.write("Data preview:")
+        st.dataframe(df.head())
+
+def detect_chart_request(user_message):
+    """
+    Detect if user is requesting a chart/visualization.
+    """
+    chart_keywords = ['chart', 'graph', 'plot', 'visualize', 'visualization', 'show chart', 'create chart', 'bar chart', 'line chart', 'pie chart']
+    return any(keyword in user_message.lower() for keyword in chart_keywords)
+
+def extract_chart_type(user_message):
+    """
+    Extract requested chart type from user message.
+    """
+    message_lower = user_message.lower()
+    if 'line chart' in message_lower or 'line graph' in message_lower:
+        return 'line'
+    elif 'bar chart' in message_lower or 'bar graph' in message_lower:
+        return 'bar'
+    elif 'pie chart' in message_lower or 'pie graph' in message_lower:
+        return 'pie'
+    else:
+        return 'auto'
+
 # UI: tool refresh + clear chat
 col1, col2 = st.columns(2)
 with col1:
@@ -121,6 +276,8 @@ with col1:
 with col2:
     if st.button("🧹 Clear chat"):
         st.session_state.messages = []
+        st.session_state.last_data = None
+        st.session_state.pending_chart = False
 
 # Auto-load once
 if st.session_state.oai_tools is None:
@@ -167,9 +324,9 @@ def mcp_blocks_to_text(blocks) -> str:
 def load_system_prompt():
     try:
         with open("system.txt", "r", encoding="utf-8") as f:
-            return f.read().strip()
+            base_prompt = f.read().strip()
     except FileNotFoundError:
-        return """You are a helpful assistant connected to an MCP server. Use available tools to answer user queries.
+        base_prompt = """You are a helpful assistant connected to an MCP server. Use available tools to answer user queries.
 
 CRITICAL QUERY CONSTRUCTION RULES:
 
@@ -200,7 +357,18 @@ For "total customer count", use:
   }
 }"""
     except Exception as e:
-        return f"Error loading system prompt: {e}"
+        base_prompt = f"Error loading system prompt: {e}"
+    
+    # Add visualization instructions
+    visualization_prompt = """
+
+VISUALIZATION INSTRUCTIONS:
+- When you return tabular data (tables with rows and columns), always end your response by asking: "Would you like me to create a chart or visualization for this data? You can specify: bar chart, line chart, or pie chart."
+- If the user asks for a chart/visualization, respond with: "I'll create that visualization for you based on the data from our previous query."
+- Do not attempt to create visualizations yourself - the system will handle chart generation when the user requests it.
+"""
+    
+    return base_prompt + visualization_prompt
 
 # --- OpenAI agent turn ---
 def agent_turn(user_text: str) -> str:
@@ -208,6 +376,18 @@ def agent_turn(user_text: str) -> str:
         raise RuntimeError("Missing OPENAI_API_KEY in .env")
 
     client = OpenAI(api_key=OPENAI_API_KEY)
+
+    # Check if user is requesting a chart
+    if detect_chart_request(user_text):
+        st.session_state.pending_chart = True
+        chart_type = extract_chart_type(user_text)
+        
+        # If we have previous data, create chart immediately
+        if st.session_state.last_data is not None:
+            create_chart(st.session_state.last_data, chart_type)
+            return f"I've created a {chart_type} chart based on the previous data. You can view it above!"
+        else:
+            return "I don't have any recent tabular data to visualize. Please run a query that returns data first, then ask for a chart."
 
     # Build chat history for OpenAI
     msgs = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
@@ -289,7 +469,14 @@ def agent_turn(user_text: str) -> str:
         ] + tool_result_msgs
     )
 
-    return followup.choices[0].message.content or "(no response)"
+    final_response = followup.choices[0].message.content or "(no response)"
+    
+    # Store data for potential visualization
+    df = parse_table_from_text(final_response)
+    if df is not None:
+        st.session_state.last_data = df
+
+    return final_response
 
 # --- Input box ---
 user_msg = st.chat_input("Ask anything. I'll pick a tool and run it.")
