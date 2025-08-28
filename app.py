@@ -70,6 +70,45 @@ def refresh_tools():
     st.session_state.oai_tools = oai_tools
     return oai_tools
 
+def validate_load_query_args(args):
+    """
+    Validate and fix common issues with execute_load_query arguments.
+    """
+    if not isinstance(args, dict):
+        return {"error": "Arguments must be a dictionary"}
+    
+    query = args.get("query", {})
+    if not isinstance(query, dict):
+        return {"error": "Query must be a dictionary object"}
+    
+    # Ensure required keys exist with proper defaults
+    fixed_query = {
+        "dimensions": query.get("dimensions", []),
+        "measures": query.get("measures", []),
+        "filters": query.get("filters", []),
+        "limit": query.get("limit", 100)
+    }
+    
+    # Validate dimensions and measures are lists
+    if not isinstance(fixed_query["dimensions"], list):
+        fixed_query["dimensions"] = []
+    if not isinstance(fixed_query["measures"], list):
+        fixed_query["measures"] = []
+    if not isinstance(fixed_query["filters"], list):
+        fixed_query["filters"] = []
+    
+    # Ensure limit is an integer
+    try:
+        fixed_query["limit"] = int(fixed_query["limit"])
+    except (ValueError, TypeError):
+        fixed_query["limit"] = 100
+    
+    # Validation: Must have at least one measure
+    if not fixed_query["measures"]:
+        return {"error": "Query must include at least one measure. Available measures: customer.total_customers, proposal.total_proposal, sales.total_sales, sales.total_revenue"}
+    
+    return {"query": fixed_query}
+
 # UI: tool refresh + clear chat
 col1, col2 = st.columns(2)
 with col1:
@@ -124,6 +163,45 @@ def mcp_blocks_to_text(blocks) -> str:
     except Exception:
         return str(blocks)
 
+# Load system prompt from system.txt
+def load_system_prompt():
+    try:
+        with open("system.txt", "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return """You are a helpful assistant connected to an MCP server. Use available tools to answer user queries.
+
+CRITICAL QUERY CONSTRUCTION RULES:
+
+For execute_load_query tool, you MUST follow this exact structure:
+
+{
+  "query": {
+    "dimensions": [],
+    "measures": ["table.measure_name"],
+    "filters": [],
+    "limit": 100
+  }
+}
+
+MANDATORY REQUIREMENTS:
+1. Always include at least one measure - Never leave measures array empty
+2. Use exact field names from schema - "customer.total_customers", not "total_customers"
+3. Dimensions can be empty for total aggregations
+4. Available measures: customer.total_customers, proposal.total_proposal, sales.total_sales, sales.total_revenue
+
+For "total customer count", use:
+{
+  "query": {
+    "dimensions": [],
+    "measures": ["customer.total_customers"], 
+    "filters": [],
+    "limit": 1
+  }
+}"""
+    except Exception as e:
+        return f"Error loading system prompt: {e}"
+
 # --- OpenAI agent turn ---
 def agent_turn(user_text: str) -> str:
     if not OPENAI_API_KEY:
@@ -135,13 +213,7 @@ def agent_turn(user_text: str) -> str:
     msgs = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
     msgs.append({"role": "user", "content": user_text})
 
-    system_prompt = (
-        "You are a tools-first assistant connected to an MCP server.\n"
-        "- If a tool can answer, call exactly one function with a STRICT JSON argument body that matches its schema.\n"
-        "- If you need clarification, ask a brief follow-up.\n"
-        "- If no tool applies, answer concisely.\n"
-        "Be accurate and terse."
-    )
+    system_prompt = load_system_prompt()
 
     tools = st.session_state.oai_tools or []
 
@@ -161,7 +233,7 @@ def agent_turn(user_text: str) -> str:
     if not tool_calls:
         return msg.content or "(no response)"
 
-    # Execute all tool calls (we encourage only one, but handle N just in case)
+    # Execute all tool calls with better error handling
     tool_result_msgs = []
     for tc in tool_calls:
         fn = tc.function
@@ -173,11 +245,27 @@ def agent_turn(user_text: str) -> str:
             tool_result_msgs.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
-                "content": f"[tool_error] Invalid tool arguments: {e}"
+                "content": f"[tool_error] Invalid tool arguments JSON: {e}. Arguments received: {fn.arguments}"
             })
             continue
 
         try:
+            # Special handling for execute_load_query to provide better feedback
+            if tool_name == "execute_load_query":
+                # Validate and fix the query structure before calling
+                validated_args = validate_load_query_args(args)
+                if "error" in validated_args:
+                    tool_result_msgs.append({
+                        "role": "tool", 
+                        "tool_call_id": tc.id,
+                        "content": f"[tool_error] {validated_args['error']}"
+                    })
+                    continue
+                
+                # Use the validated arguments
+                args = validated_args
+                st.write(f"Debug - Validated query: {args}")
+
             blocks = call_tool_sync(mcp_url, tool_name, args)
             text_result = mcp_blocks_to_text(blocks)
             tool_result_msgs.append({
@@ -204,7 +292,7 @@ def agent_turn(user_text: str) -> str:
     return followup.choices[0].message.content or "(no response)"
 
 # --- Input box ---
-user_msg = st.chat_input("Ask anything. I’ll pick a tool and run it.")
+user_msg = st.chat_input("Ask anything. I'll pick a tool and run it.")
 if user_msg:
     st.session_state.messages.append({"role": "user", "content": user_msg})
     with st.chat_message("user"):

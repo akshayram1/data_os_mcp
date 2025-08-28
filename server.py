@@ -19,6 +19,41 @@ def _get_configured_credentials() -> tuple[Optional[str], Optional[str]]:
     secret = _session_config.get("lens_api_secret")
     return lens_url, secret
 
+def validate_and_fix_load_query(query_dict):
+    """
+    Validate and fix common issues with load query structure.
+    """
+    if not isinstance(query_dict, dict):
+        return {"error": "Query must be a dictionary"}
+    
+    # Ensure required keys exist with proper defaults
+    fixed_query = {
+        "dimensions": query_dict.get("dimensions", []),
+        "measures": query_dict.get("measures", []),
+        "filters": query_dict.get("filters", []),
+        "limit": query_dict.get("limit", 100)
+    }
+    
+    # Validate dimensions and measures are lists
+    if not isinstance(fixed_query["dimensions"], list):
+        fixed_query["dimensions"] = []
+    if not isinstance(fixed_query["measures"], list):
+        fixed_query["measures"] = []
+    if not isinstance(fixed_query["filters"], list):
+        fixed_query["filters"] = []
+    
+    # Ensure limit is an integer
+    try:
+        fixed_query["limit"] = int(fixed_query["limit"])
+    except (ValueError, TypeError):
+        fixed_query["limit"] = 100
+    
+    # Validation: Must have at least one measure
+    if not fixed_query["measures"]:
+        return {"error": "Query must include at least one measure"}
+    
+    return fixed_query
+
 @mcp.tool()
 def configure_dataos(
     lens_api_url: str,
@@ -124,8 +159,6 @@ def get_metadata(
     except Exception as e:
         return {"error": str(e)}
 
-# NOTE: execute_query tool removed — use `execute_graphql` for all queries (GraphQL endpoint).
-
 @mcp.tool()
 def get_connection_status() -> Dict[str, Any]:
     """Check if DataOS credentials are configured and working."""
@@ -140,7 +173,6 @@ def get_connection_status() -> Dict[str, Any]:
         "lens_url": lens_url,
         "message": "Credentials are configured"
     }
-
 
 @mcp.tool()
 def execute_graphql(
@@ -165,7 +197,6 @@ def execute_graphql(
     except Exception as e:
         return {"error": str(e)}
 
-
 @mcp.tool()
 def execute_load_query(query: dict) -> Dict[str, Any]:
     """
@@ -173,9 +204,9 @@ def execute_load_query(query: dict) -> Dict[str, Any]:
     Args:
         query: Query object with dimensions, measures, filters, and limit
               Example: {
-                  "dimensions": ["table.dimension_name"],
-                  "measures": ["table.measure_name"],
-                  "filters": [{"and": [{"member": "table.dimension_name", "operator": "equals", "values": ["value"]}]}],
+                  "dimensions": [],
+                  "measures": ["customer.total_customers"],
+                  "filters": [],
                   "limit": 100
               }
     Returns:
@@ -185,12 +216,17 @@ def execute_load_query(query: dict) -> Dict[str, Any]:
     if not lens_url or not secret:
         return {"error": "DataOS not configured. Please call configure_dataos() first with your credentials."}
     
+    # Validate and fix query structure
+    validated_query = validate_and_fix_load_query(query)
+    if "error" in validated_query:
+        return validated_query
+    
     try:
         import requests
         import json
         
-        # Convert query dict to JSON string
-        query_json = json.dumps(query)
+        # Convert validated query dict to JSON string
+        query_json = json.dumps(validated_query)
         
         # Build the load URL with query parameter
         load_url = f"{lens_url}/load"
@@ -210,6 +246,7 @@ def execute_load_query(query: dict) -> Dict[str, Any]:
         response = requests.get(load_url, headers=headers, params=params, timeout=120)
         
         print("Requesting URL:", load_url)
+        print("Validated Query:", validated_query)
         print("Query params:", params)
         print("Using headers:", {k: v if k != "Authorization" else "***" for k, v in headers.items()})
         print("Response code:", response.status_code)
@@ -219,27 +256,10 @@ def execute_load_query(query: dict) -> Dict[str, Any]:
             return {"error": f"HTTP {response.status_code}: {response.text[:200]}"}
         
         data = response.json()
-        return {"success": True, "data": data}
+        return {"success": True, "data": data, "query_used": validated_query}
         
     except Exception as e:
         return {"error": str(e)}
-
-
-@mcp.tool()
-def get_connection_status() -> Dict[str, Any]:
-    """Check if DataOS credentials are configured and working."""
-    lens_url, secret = _get_configured_credentials()
-    if not lens_url or not secret:
-        return {
-            "configured": False,
-            "message": "No credentials configured"
-        }
-    return {
-        "configured": True,
-        "lens_url": lens_url,
-        "message": "Credentials are configured"
-    }
-
 
 @mcp.tool()
 def list_tools() -> Dict[str, Any]:
@@ -248,7 +268,6 @@ def list_tools() -> Dict[str, Any]:
     Returns:
         A dict with a `tools` key containing a list of tool metadata.
     """
-
 
     tools: List[Dict[str, str]] = []
 
