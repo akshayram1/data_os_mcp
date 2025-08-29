@@ -68,12 +68,18 @@ This will launch the MCP server on the default port (8000). You can change the p
 
 If you want to activate the environment manually:
 
+**On Linux/macOS:**
+```bash
+source .venv/bin/activate
+```
+
+**On Windows (PowerShell):**
 ```powershell
 .\.venv\Scripts\Activate.ps1
 ```
 
 Then run:
 
-```powershell
+```bash
 python server.py
 ```

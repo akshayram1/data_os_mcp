@@ -9,6 +9,8 @@ dependencies = [
     "graphql-core>=3.2.6",
     "mcp[cli]>=1.9.3",
     "openai>=1.102.0",
+    "plotly>=6.3.0",
     "python-dotenv>=1.1.0",
+    "streamlit>=1.49.0",
     "tavily-python>=0.7.7",
 ]
