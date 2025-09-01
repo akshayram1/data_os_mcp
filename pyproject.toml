@@ -5,12 +5,19 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "altair>=5.5.0",
+    "bokeh>=3.8.0",
     "fastapi>=0.115.12",
     "graphql-core>=3.2.6",
+    "matplotlib>=3.10.6",
     "mcp[cli]>=1.9.3",
     "openai>=1.102.0",
     "plotly>=6.3.0",
+    "plotnine>=0.15.0",
     "python-dotenv>=1.1.0",
+    "scikit-learn>=1.7.1",
+    "scipy>=1.16.1",
+    "seaborn>=0.13.2",
     "streamlit>=1.49.0",
     "tavily-python>=0.7.7",
 ]

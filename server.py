@@ -22,6 +22,7 @@ def _get_configured_credentials() -> tuple[Optional[str], Optional[str]]:
 def validate_and_fix_load_query(query_dict):
     """
     Validate and fix common issues with load query structure.
+    Supports the full DataOS Lens query structure including timeDimensions.
     """
     if not isinstance(query_dict, dict):
         return {"error": "Query must be a dictionary"}
@@ -31,6 +32,7 @@ def validate_and_fix_load_query(query_dict):
         "dimensions": query_dict.get("dimensions", []),
         "measures": query_dict.get("measures", []),
         "filters": query_dict.get("filters", []),
+        "timeDimensions": query_dict.get("timeDimensions", []),  # CRITICAL: Add timeDimensions support
         "limit": query_dict.get("limit", 100)
     }
     
@@ -41,6 +43,28 @@ def validate_and_fix_load_query(query_dict):
         fixed_query["measures"] = []
     if not isinstance(fixed_query["filters"], list):
         fixed_query["filters"] = []
+    if not isinstance(fixed_query["timeDimensions"], list):
+        fixed_query["timeDimensions"] = []
+    
+    # Validate timeDimensions structure
+    for i, time_dim in enumerate(fixed_query["timeDimensions"]):
+        if not isinstance(time_dim, dict):
+            return {"error": f"timeDimensions[{i}] must be a dictionary"}
+        
+        # Required fields for timeDimensions
+        if "dimension" not in time_dim:
+            return {"error": f"timeDimensions[{i}] must include 'dimension' field"}
+        
+        # Optional fields with defaults
+        if "dateRange" not in time_dim:
+            time_dim["dateRange"] = ["2023-01-01", "2023-12-31"]  # Default range
+        
+        if "granularity" not in time_dim:
+            time_dim["granularity"] = "month"  # Default granularity
+        
+        # Validate dateRange is a list of 2 strings
+        if not isinstance(time_dim["dateRange"], list) or len(time_dim["dateRange"]) != 2:
+            return {"error": f"timeDimensions[{i}].dateRange must be a list with start and end dates"}
     
     # Ensure limit is an integer
     try:
@@ -51,6 +75,10 @@ def validate_and_fix_load_query(query_dict):
     # Validation: Must have at least one measure
     if not fixed_query["measures"]:
         return {"error": "Query must include at least one measure"}
+    
+    # Add debug logging for timeDimensions
+    if fixed_query["timeDimensions"]:
+        print(f"DEBUG: Processing timeDimensions: {fixed_query['timeDimensions']}")
     
     return fixed_query
 
