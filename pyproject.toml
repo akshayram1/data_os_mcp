@@ -9,6 +9,7 @@ dependencies = [
     "bokeh>=3.8.0",
     "fastapi>=0.115.12",
     "graphql-core>=3.2.6",
+    "lida>=0.0.14",
     "matplotlib>=3.10.6",
     "mcp[cli]>=1.9.3",
     "openai>=1.102.0",

@@ -41,124 +41,124 @@ except ImportError:
 
 from openai import OpenAI
 from mcp_async_client import list_tools_sync, call_tool_sync
-from visualization_intelligence import VisualizationIntelligence, get_smart_visualization_suggestions, analyze_query_for_chart_type
+
+# Add LIDA imports
+try:
+    from lida import Manager, TextGenerationConfig, llm
+    LIDA_AVAILABLE = True
+except ImportError:
+    LIDA_AVAILABLE = False
+    st.warning("LIDA library not available. Intelligent auto-visualization will be disabled.")
 
 load_dotenv()
 
-def auto_select_chart_type(df):
+# Initialize LIDA
+lida_manager = None
+if LIDA_AVAILABLE and os.getenv("OPENAI_API_KEY"):
+    try:
+        lida_manager = Manager(text_gen=llm("openai"))
+    except Exception as e:
+        st.warning(f"Failed to initialize LIDA: {str(e)}")
+        lida_manager = None
+
+def preprocess_lida_code(lida_code, df_name="data"):
     """
-    Intelligently select the best chart type based on data structure and content.
+    Enhanced preprocessing for LIDA-generated code to handle common issues:
+    - Remove top-level return statements
+    - Handle function wrapping
+    - Clean semicolons and whitespace
+    - Extract function calls if needed
     """
-    if df is None or df.empty:
-        return "Bar Chart", "No data available"
+    if not lida_code or not isinstance(lida_code, str):
+        return "", False
     
-    # Get data characteristics
-    num_rows = len(df)
-    num_cols = len(df.columns)
-    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    categorical_cols = df.select_dtypes(include=['object', 'string']).columns.tolist()
-    datetime_cols = df.select_dtypes(include=['datetime64']).columns.tolist()
+    logger.info(f"🔧 Preprocessing LIDA code - Original length: {len(lida_code)}")
+    logger.info(f"🔧 Original code:\n{lida_code}")
     
-    # Check for date/time columns (including string dates)
-    potential_date_cols = []
-    for col in categorical_cols:
-        if any(keyword in col.lower() for keyword in ['date', 'time', 'month', 'year', 'day']):
-            potential_date_cols.append(col)
+    # Clean the code
+    clean_code = lida_code.strip()
     
-    # Check for revenue/financial data
-    revenue_cols = []
-    for col in df.columns:
-        if any(keyword in col.lower() for keyword in ['revenue', 'sales', 'amount', 'price', 'cost', 'profit']):
-            revenue_cols.append(col)
+    # Remove ALL return statements (more comprehensive approach)
+    # This handles cases like "return plt", "return fig", "return chart", etc.
+    return_patterns = [
+        r'^\s*return\s+[^;]*;?\s*$',        # Return at start of line
+        r'\n\s*return\s+[^;]*;?\s*$',       # Return at end after newline
+        r'\s*return\s+[^;]*;?\s*$',         # Any trailing return
+        r'return\s+plt\s*;?\s*',            # Specific plt return
+        r'return\s+fig\s*;?\s*',            # Specific fig return
+        r'return\s+chart\s*;?\s*',          # Specific chart return
+        r'return\s+[a-zA-Z_][a-zA-Z0-9_]*\s*;?\s*$',  # Any variable return
+    ]
     
-    # Check for percentage/ratio data
-    percentage_cols = []
-    for col in numeric_cols:
-        if df[col].max() <= 100 and df[col].min() >= 0:
-            if any(keyword in col.lower() for keyword in ['percent', 'ratio', 'rate', '%']):
-                percentage_cols.append(col)
+    # Apply all patterns to remove return statements
+    for pattern in return_patterns:
+        before_count = clean_code.count('return')
+        clean_code = re.sub(pattern, '', clean_code, flags=re.MULTILINE | re.IGNORECASE)
+        after_count = clean_code.count('return')
+        if before_count > after_count:
+            logger.info(f"✅ Applied pattern '{pattern}' - removed {before_count - after_count} return statement(s)")
     
-    reasoning = []
+    # Additional cleanup for any remaining return statements
+    lines = clean_code.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        # Skip lines that are just return statements
+        stripped_line = line.strip()
+        if re.match(r'^\s*return\s+.*$', stripped_line):
+            logger.info(f"✅ Removed return line: '{stripped_line}'")
+            continue
+        
+        # Handle semicolon-separated lines with return statements
+        if ';' in line and 'return' in line:
+            # Split by semicolon and filter out return statements
+            parts = line.split(';')
+            filtered_parts = []
+            for part in parts:
+                part_stripped = part.strip()
+                if not re.match(r'^\s*return\s+.*$', part_stripped):
+                    filtered_parts.append(part)
+                else:
+                    logger.info(f"✅ Removed return from semicolon line: '{part_stripped}'")
+            
+            # Rejoin the non-return parts
+            if filtered_parts:
+                cleaned_lines.append(';'.join(filtered_parts))
+        else:
+            cleaned_lines.append(line)
     
-    # Decision logic based on data characteristics
+    clean_code = '\n'.join(cleaned_lines)
     
-    # Time series data - Line Chart
-    if (datetime_cols or potential_date_cols) and revenue_cols:
-        reasoning.append("📈 Time series data detected with financial metrics")
-        return "Line Chart", " | ".join(reasoning)
+    # Remove trailing semicolons from all lines
+    clean_code = re.sub(r';\s*$', '', clean_code, flags=re.MULTILINE)
     
-    # Monthly/temporal data - Line Chart
-    if any(keyword in str(df.columns).lower() for keyword in ['month', 'quarter', 'year', 'week']):
-        if revenue_cols:
-            reasoning.append("📅 Temporal data with revenue metrics")
-            return "Line Chart", " | ".join(reasoning)
+    # Check if code is wrapped in a function
+    is_function = bool(re.search(r'def\s+\w+\s*\([^)]*\):', clean_code))
     
-    # Product/Category data with prices - Bar Chart
-    if any(keyword in str(df.columns).lower() for keyword in ['product', 'category', 'brand']) and revenue_cols:
-        reasoning.append("🛍️ Product/Category data with financial metrics")
-        return "Bar Chart", " | ".join(reasoning)
+    logger.info(f"🔧 Is function: {is_function}")
     
-    # Correlation analysis - Scatter Plot
-    if len(numeric_cols) >= 2 and num_rows >= 10:
-        reasoning.append("🔍 Multiple numeric variables for correlation analysis")
-        return "Scatter Plot", " | ".join(reasoning)
+    if is_function:
+        # Extract function name
+        func_match = re.search(r'def\s+(\w+)\s*\([^)]*\):', clean_code)
+        func_name = func_match.group(1) if func_match else "plot"
+        
+        # Add function call at the end
+        clean_code += f"\n{func_name}({df_name})"
+        logger.info(f"✅ Added function call: {func_name}({df_name})")
     
-    # Proportional data - Pie Chart
-    if len(categorical_cols) == 1 and len(numeric_cols) == 1 and num_rows <= 12:
-        reasoning.append("🥧 Single category with values, good for proportions")
-        return "Pie Chart", " | ".join(reasoning)
+    # Final cleanup - remove any remaining isolated return statements
+    clean_code = re.sub(r'\n\s*return\s+[^;]*;?\s*$', '', clean_code)
+    clean_code = re.sub(r'^\s*return\s+[^;]*;?\s*\n', '', clean_code)
     
-    # Distribution analysis - Histogram/Distribution
-    if len(numeric_cols) == 1 and num_rows >= 20:
-        reasoning.append("📊 Single numeric variable with sufficient data points")
-        return "Distribution", " | ".join(reasoning)
+    # Add plt.show() if matplotlib is being used and no show() call exists
+    if 'plt.' in clean_code and 'plt.show()' not in clean_code and 'st.pyplot' not in clean_code:
+        # Don't add plt.show() as it might interfere with Streamlit
+        pass
     
-    # Comparison data - Bar Chart
-    if len(categorical_cols) >= 1 and len(numeric_cols) >= 1:
-        reasoning.append("📊 Categorical data with numeric values for comparison")
-        return "Bar Chart", " | ".join(reasoning)
+    final_code = clean_code.strip()
+    logger.info(f"🔧 Final cleaned code length: {len(final_code)}")
+    logger.info(f"🔧 Final cleaned code:\n{final_code}")
     
-    # Heatmap for correlation matrix
-    if len(numeric_cols) >= 3:
-        reasoning.append("🔥 Multiple numeric variables suitable for correlation heatmap")
-        return "Heatmap", " | ".join(reasoning)
-    
-    # Default fallback
-    reasoning.append("📊 Default choice for general data visualization")
-    return "Bar Chart", " | ".join(reasoning)
-
-
-def explain_chart_choice(df, chart_type, reasoning):
-    """Display explanation for the auto-selected chart type."""
-    st.info(f"""
-    🤖 **Auto-Selected Chart Type: {chart_type}**
-    
-    **Reasoning:** {reasoning}
-    
-    **Data Analysis:**
-    - Rows: {len(df)}
-    - Columns: {len(df.columns)}
-    - Numeric columns: {len(df.select_dtypes(include=[np.number]).columns)}
-    - Categorical columns: {len(df.select_dtypes(include=['object', 'string']).columns)}
-    - Date columns: {len(df.select_dtypes(include=['datetime64']).columns)}
-    """)
-
-
-def create_monthly_revenue_query(year):
-    """Create a proper query for monthly revenue data."""
-    return {
-        "dimensions": [],
-        "measures": ["sales.total_revenue"],
-        "timeDimensions": [
-            {
-                "dimension": "sales.order_date",
-                "dateRange": [f"{year}-01-01", f"{year}-12-31"],
-                "granularity": "month"
-            }
-        ],
-        "filters": [],
-        "limit": 100
-    }
+    return final_code, is_function
 
 def fix_time_dimension_query(base_query, time_dimension, date_range, granularity="month"):
     """Fix time dimension queries to ensure proper aggregation."""
@@ -180,151 +180,6 @@ def fix_time_dimension_query(base_query, time_dimension, date_range, granularity
     
     return fixed_query
 
-def handle_monthly_data_request(year="2023"):
-    """Handle requests for monthly breakdown data."""
-    try:
-        # Create the monthly query
-        monthly_query = create_monthly_revenue_query(year)
-        
-        # Display the query for debugging
-        st.write("**Generated Query for Monthly Data:**")
-        st.json(monthly_query)
-        
-        # Show the issue explanation
-        st.info("""
-        **Issue with Current Query Response:**
-        
-        The Lens2 API is returning aggregated data instead of monthly breakdown because:
-        
-        1. **Time Dimension Not Properly Processed**: The `timeDimensions` array in the response shows as empty `[]`
-        2. **Granularity Not Applied**: The `month` granularity is not being applied to aggregate data by month
-        3. **Possible Schema Issue**: The dimension `sales.order_date` might not support time aggregation
-        
-        **Solutions to Try:**
-        """)
-        
-        # Alternative query approaches
-        st.markdown("### 🔧 Alternative Query Approaches")
-        
-        tab1, tab2, tab3 = st.tabs(["📅 Add Date Dimension", "🔍 Check Schema", "📊 Manual Month Filter"])
-        
-        with tab1:
-            st.markdown("**Try adding date as a regular dimension:**")
-            alt_query1 = {
-                "dimensions": ["sales.order_date"],
-                "measures": ["sales.total_revenue"],
-                "timeDimensions": [
-                    {
-                        "dimension": "sales.order_date",
-                        "dateRange": [f"{year}-01-01", f"{year}-12-31"],
-                        "granularity": "month"
-                    }
-                ],
-                "filters": [],
-                "limit": 100
-            }
-            st.json(alt_query1)
-            
-            if st.button("🚀 Try This Query", key="alt1"):
-                st.code(f"""
-Copy this into chat:
-                
-Please execute this query: {json.dumps(alt_query1, indent=2)}
-                """)
-        
-        with tab2:
-            st.markdown("**Check available dimensions and measures:**")
-            schema_query = "Please get the Lens2 schema to see available dimensions and time dimensions"
-            
-            if st.button("📋 Get Schema", key="schema"):
-                st.code(f"""
-Copy this into chat:
-                
-{schema_query}
-                """)
-        
-        with tab3:
-            st.markdown("**Try individual month queries:**")
-            
-            months = [
-                ("January", "2023-01-01", "2023-01-31"),
-                ("February", "2023-02-01", "2023-02-28"),
-                ("March", "2023-03-01", "2023-03-31"),
-                ("April", "2023-04-01", "2023-04-30"),
-                ("May", "2023-05-01", "2023-05-31"),
-                ("June", "2023-06-01", "2023-06-30")
-            ]
-            
-            selected_month = st.selectbox("Select Month:", options=[m[0] for m in months])
-            
-            if st.button("🗓️ Query Selected Month", key="month"):
-                month_data = next(m for m in months if m[0] == selected_month)
-                month_query = {
-                    "dimensions": [],
-                    "measures": ["sales.total_revenue"],
-                    "filters": [
-                        {
-                            "member": "sales.order_date",
-                            "operator": "inDateRange",
-                            "values": [month_data[1], month_data[2]]
-                        }
-                    ],
-                    "limit": 100
-                }
-                
-                st.code(f"""
-Copy this into chat:
-                
-Please execute this query for {selected_month}: {json.dumps(month_query, indent=2)}
-                """)
-        
-        # Expected vs Actual Response
-        st.markdown("### 📊 Expected vs Actual Response")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("**Expected Response (Monthly Data):**")
-            expected_response = {
-                "data": [
-                    {"sales.order_date": "2023-01-01", "sales.total_revenue": "350000000"},
-                    {"sales.order_date": "2023-02-01", "sales.total_revenue": "380000000"},
-                    {"sales.order_date": "2023-03-01", "sales.total_revenue": "420000000"},
-                    # ... more months
-                ]
-            }
-            st.json(expected_response)
-        
-        with col2:
-            st.markdown("**Actual Response (Aggregated):**")
-            actual_response = {
-                "data": [
-                    {"sales.total_revenue": "4661006049.38"}
-                ]
-            }
-            st.json(actual_response)
-                
-    except Exception as e:
-        st.error(f"❌ Error executing monthly query: {str(e)}")
-        logger.error(f"Monthly query error: {e}")
-
-def execute_mcp_request(tool_name, arguments):
-    """Execute an MCP request and return the response."""
-    try:
-        # This should integrate with your existing MCP client
-        # For now, we'll use a placeholder
-        st.info(f"Executing MCP tool: {tool_name} with args: {arguments}")
-        
-        # You'll need to integrate this with your actual MCP client
-        # For example, if you have an mcp_client instance:
-        # return mcp_client.call_tool(tool_name, arguments)
-        
-        return {"status": "placeholder", "data": []}
-        
-    except Exception as e:
-        st.error(f"MCP request failed: {str(e)}")
-        return None
-
 st.set_page_config(page_title="Agentic MCP Chat (OpenAI)", layout="wide")
 st.title("🤖 Agentic MCP Chat with Intelligent Visualization")
 st.caption("Ask in natural language; the assistant will pick an MCP tool, build args, run it, and provide intelligent visualization recommendations.")
@@ -337,7 +192,7 @@ with st.sidebar:
     # Tab selection
     tab_selection = st.radio(
         "Navigation",
-        ["⚙️ Settings", "📊 Visualization"],
+        ["⚙️ Settings"],
         index=0,
         horizontal=True
     )
@@ -373,578 +228,6 @@ with st.sidebar:
         if not OPENAI_API_KEY:
             st.error("Add OPENAI_API_KEY to your .env")
     
-    elif tab_selection == "📊 Visualization":
-        st.header("📊 Chart Configuration")
-        
-        # Initialize visualization session state
-        if "viz_config" not in st.session_state:
-            st.session_state.viz_config = {
-                "chart_type": "auto",
-                "library": "altair",
-                "color_scheme": "default",
-                "title": "",
-                "show_legend": True,
-                "interactive": True
-            }
-        
-        # Chart Type Selection
-        st.subheader("📈 Chart Type")
-        chart_types = [
-            "Auto (Smart Selection)", "Bar Chart", "Line Chart", "Scatter Plot", "Area Chart", 
-            "Pie Chart", "Donut Chart", "Heatmap", "Box Plot", "Violin Plot", 
-            "Distribution", "Correlation", "Bubble Chart", "Treemap", "Horizontal Bar"
-        ]
-        selected_chart_type = st.selectbox(
-            "Choose Chart Type:",
-            chart_types,
-            index=0,
-            help="Auto will intelligently select the best chart type based on your data structure and content"
-        )
-        st.session_state.viz_config["chart_type"] = selected_chart_type
-        
-        # Library Selection
-        st.subheader("🎨 Chart Library")
-        library_options = ["altair", "plotly", "matplotlib", "seaborn"]
-            
-        selected_library = st.selectbox(
-            "Choose Library:",
-            library_options,
-            index=library_options.index(st.session_state.viz_config["library"]),
-            help="Select the charting library to use"
-        )
-        st.session_state.viz_config["library"] = selected_library
-        
-        # Color Schemes
-        st.subheader("🎨 Styling")
-        color_schemes = [
-            "default", "viridis", "plasma", "coolwarm", "husl", 
-            "Set1", "Set2", "Category10", "Category20"
-        ]
-        selected_color = st.selectbox(
-            "Color Scheme:",
-            color_schemes,
-            index=color_schemes.index(st.session_state.viz_config["color_scheme"])
-        )
-        st.session_state.viz_config["color_scheme"] = selected_color
-        
-        # Chart Title
-        chart_title = st.text_input(
-            "Chart Title (optional):",
-            value=st.session_state.viz_config["title"],
-            placeholder="Enter custom chart title"
-        )
-        st.session_state.viz_config["title"] = chart_title
-        
-        # Chart Options
-        st.subheader("⚙️ Chart Options")
-        show_legend = st.checkbox(
-            "Show Legend",
-            value=st.session_state.viz_config["show_legend"]
-        )
-        st.session_state.viz_config["show_legend"] = show_legend
-        
-        interactive = st.checkbox(
-            "Interactive Charts",
-            value=st.session_state.viz_config["interactive"],
-            help="Enable zoom, pan, and hover interactions"
-        )
-        st.session_state.viz_config["interactive"] = interactive
-        
-        st.markdown("---")
-        
-        # Create Chart Button
-        if st.button("🎨 Create Chart", type="primary", width="stretch"):
-            if st.session_state.last_data is not None:
-                with st.spinner("Creating your visualization..."):
-                    try:
-                        # Get configuration
-                        chart_type = st.session_state.viz_config["chart_type"]
-                        library = st.session_state.viz_config["library"]
-                        title = st.session_state.viz_config["title"] or "Generated Chart"
-                        
-                        # Convert data to DataFrame
-                        df = pd.DataFrame(st.session_state.last_data) if isinstance(st.session_state.last_data, list) else st.session_state.last_data
-                        
-                        # Auto-select chart type if needed
-                        if chart_type == "Auto (Smart Selection)":
-                            auto_chart_type, reasoning = auto_select_chart_type(df)
-                            explain_chart_choice(df, auto_chart_type, reasoning)
-                            chart_type = auto_chart_type
-                        
-                        # Debug: Show data structure
-                        with st.expander("📊 Data Preview & Analysis", expanded=False):
-                            st.write(f"**Shape:** {df.shape}")
-                            st.write(f"**Columns:** {list(df.columns)}")
-                            st.write(f"**Data types:** {df.dtypes.to_dict()}")
-                            st.dataframe(df.head(), width="stretch")
-                        
-                        # Handle different data types properly
-                        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-                        string_cols = df.select_dtypes(include=['object', 'string']).columns.tolist()
-                        datetime_cols = df.select_dtypes(include=['datetime64']).columns.tolist()
-                        
-                        # Smart column selection for charts
-                        if chart_type.lower() in ["bar chart", "bar"]:
-                            if len(numeric_cols) >= 1:
-                                x_col = string_cols[0] if string_cols else df.columns[0]
-                                y_col = numeric_cols[0]
-                                
-                                if library.lower() == "altair":
-                                    chart = alt.Chart(df).mark_bar().encode(
-                                        x=alt.X(x_col, title=x_col),
-                                        y=alt.Y(y_col, title=y_col),
-                                        color=alt.Color(y_col, scale=alt.Scale(scheme='viridis')),
-                                        tooltip=[x_col, y_col]
-                                    ).properties(
-                                        title=title,
-                                        width=600,
-                                        height=400
-                                    ).interactive()
-                                    st.altair_chart(chart, width="stretch")
-                                else:
-                                    fig = px.bar(df, x=x_col, y=y_col, title=title, color=y_col)
-                                    st.plotly_chart(fig, width="stretch")
-                            else:
-                                st.error("❌ Bar chart requires numeric data")
-                                
-                        elif chart_type.lower() in ["line chart", "line"]:
-                            if len(numeric_cols) >= 1:
-                                x_col = datetime_cols[0] if datetime_cols else (string_cols[0] if string_cols else df.columns[0])
-                                y_col = numeric_cols[0]
-                                
-                                if library.lower() == "altair":
-                                    chart = alt.Chart(df).mark_line(point=True).encode(
-                                        x=alt.X(x_col, title=x_col),
-                                        y=alt.Y(y_col, title=y_col),
-                                        color=alt.value('steelblue'),
-                                        tooltip=[x_col, y_col]
-                                    ).properties(
-                                        title=title,
-                                        width=600,
-                                        height=400
-                                    ).interactive()
-                                    st.altair_chart(chart, width="stretch")
-                                else:
-                                    fig = px.line(df, x=x_col, y=y_col, title=title)
-                                    st.plotly_chart(fig, width="stretch")
-                            else:
-                                st.error("❌ Line chart requires numeric data")
-                                
-                        elif chart_type.lower() in ["scatter plot", "scatter"]:
-                            if len(numeric_cols) >= 2:
-                                x_col, y_col = numeric_cols[0], numeric_cols[1]
-                                color_col = string_cols[0] if string_cols else None
-                                
-                                if library.lower() == "altair":
-                                    chart = alt.Chart(df).mark_circle(size=100).encode(
-                                        x=alt.X(x_col, title=x_col),
-                                        y=alt.Y(y_col, title=y_col),
-                                        color=alt.Color(color_col, title=color_col) if color_col else alt.value('steelblue'),
-                                        tooltip=[x_col, y_col] + ([color_col] if color_col else [])
-                                    ).properties(
-                                        title=title,
-                                        width=600,
-                                        height=400
-                                    ).interactive()
-                                    st.altair_chart(chart, width="stretch")
-                                else:
-                                    fig = px.scatter(df, x=x_col, y=y_col, color=color_col, title=title)
-                                    st.plotly_chart(fig, width="stretch")
-                            elif len(numeric_cols) >= 1:
-                                x_col = string_cols[0] if string_cols else df.columns[0]
-                                y_col = numeric_cols[0]
-                                
-                                if library.lower() == "altair":
-                                    chart = alt.Chart(df).mark_circle(size=100).encode(
-                                        x=alt.X(x_col, title=x_col),
-                                        y=alt.Y(y_col, title=y_col),
-                                        color=alt.Color(y_col, scale=alt.Scale(scheme='viridis')),
-                                        tooltip=[x_col, y_col]
-                                    ).properties(
-                                        title=title,
-                                        width=600,
-                                        height=400
-                                    ).interactive()
-                                    st.altair_chart(chart, width="stretch")
-                                else:
-                                    fig = px.scatter(df, x=x_col, y=y_col, title=title)
-                                    st.plotly_chart(fig, width="stretch")
-                            else:
-                                st.error("❌ Scatter plot requires numeric data")
-                                
-                        elif chart_type.lower() in ["pie chart", "pie"]:
-                            if len(numeric_cols) > 0:
-                                names_col = string_cols[0] if string_cols else None
-                                values_col = numeric_cols[0]
-                                
-                                if library.lower() == "altair":
-                                    if names_col:
-                                        chart = alt.Chart(df).mark_arc().encode(
-                                            theta=alt.Theta(values_col, title=values_col),
-                                            color=alt.Color(names_col, title=names_col),
-                                            tooltip=[names_col, values_col]
-                                        ).properties(
-                                            title=title,
-                                            width=400,
-                                            height=400
-                                        )
-                                        st.altair_chart(chart, width="stretch")
-                                    else:
-                                        st.error("❌ Pie chart needs categorical labels")
-                                else:
-                                    if names_col:
-                                        fig = px.pie(df, names=names_col, values=values_col, title=title)
-                                    else:
-                                        fig = px.pie(df, values=values_col, title=title)
-                                    st.plotly_chart(fig, width="stretch")
-                            else:
-                                st.error("❌ Pie chart requires numeric data")
-                                
-                        else:
-                            # Default to bar chart
-                            if len(numeric_cols) >= 1:
-                                x_col = string_cols[0] if string_cols else df.columns[0]
-                                y_col = numeric_cols[0]
-                                
-                                if library.lower() == "altair":
-                                    chart = alt.Chart(df).mark_bar().encode(
-                                        x=alt.X(x_col, title=x_col),
-                                        y=alt.Y(y_col, title=y_col),
-                                        color=alt.Color(y_col, scale=alt.Scale(scheme='viridis')),
-                                        tooltip=[x_col, y_col]
-                                    ).properties(
-                                        title=title,
-                                        width=600,
-                                        height=400
-                                    ).interactive()
-                                    st.altair_chart(chart, width="stretch")
-                                else:
-                                    fig = px.bar(df, x=x_col, y=y_col, title=title)
-                                    st.plotly_chart(fig, width="stretch")
-                            else:
-                                st.error("❌ Chart requires numeric data")
-                        
-                        st.success("✅ Chart created successfully!")
-                        
-                    except Exception as e:
-                        st.error(f"❌ Error creating chart: {str(e)}")
-                        # Show debug information
-                        with st.expander("🐛 Debug Info", expanded=False):
-                            st.write("Data sample:")
-                            st.dataframe(df.head() if 'df' in locals() else st.session_state.last_data)
-                            st.write("Error details:", str(e))
-            else:
-                st.warning("⚠️ No data available. Please run a query first to get data for visualization.")
-        
-        # Quick Chart Buttons
-        st.markdown("### 🚀 Quick Charts")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button("🤖 Auto Chart", width="stretch", help="Automatically select the best chart type"):
-                if st.session_state.last_data is not None:
-                    try:
-                        df = pd.DataFrame(st.session_state.last_data) if isinstance(st.session_state.last_data, list) else st.session_state.last_data
-                        
-                        # Auto-select chart type
-                        auto_chart_type, reasoning = auto_select_chart_type(df)
-                        explain_chart_choice(df, auto_chart_type, reasoning)
-                        
-                        # Create the auto-selected chart
-                        library = st.session_state.viz_config["library"]
-                        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-                        string_cols = df.select_dtypes(include=['object', 'string']).columns.tolist()
-                        
-                        if auto_chart_type.lower() == "line chart" and len(numeric_cols) >= 1:
-                            x_col = string_cols[0] if string_cols else df.columns[0]
-                            y_col = numeric_cols[0]
-                            if library.lower() == "altair":
-                                chart = alt.Chart(df).mark_line(point=True).encode(
-                                    x=alt.X(x_col, title=x_col),
-                                    y=alt.Y(y_col, title=y_col),
-                                    tooltip=[x_col, y_col]
-                                ).properties(title=f"Auto-Selected: {auto_chart_type}").interactive()
-                                st.altair_chart(chart, width="stretch")
-                            else:
-                                fig = px.line(df, x=x_col, y=y_col, title=f"Auto-Selected: {auto_chart_type}")
-                                st.plotly_chart(fig, width="stretch")
-                        elif auto_chart_type.lower() == "bar chart" and len(numeric_cols) >= 1:
-                            x_col = string_cols[0] if string_cols else df.columns[0]
-                            y_col = numeric_cols[0]
-                            if library.lower() == "altair":
-                                chart = alt.Chart(df).mark_bar().encode(
-                                    x=alt.X(x_col, title=x_col),
-                                    y=alt.Y(y_col, title=y_col),
-                                    color=alt.Color(y_col, scale=alt.Scale(scheme='viridis')),
-                                    tooltip=[x_col, y_col]
-                                ).properties(title=f"Auto-Selected: {auto_chart_type}").interactive()
-                                st.altair_chart(chart, width="stretch")
-                            else:
-                                fig = px.bar(df, x=x_col, y=y_col, title=f"Auto-Selected: {auto_chart_type}")
-                                st.plotly_chart(fig, width="stretch")
-                        
-                        st.success(f"✅ {auto_chart_type} created automatically!")
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
-                else:
-                    st.warning("No data available")
-            
-            if st.button("� Bar Chart", width="stretch"):
-                if st.session_state.last_data is not None:
-                    try:
-                        df = pd.DataFrame(st.session_state.last_data) if isinstance(st.session_state.last_data, list) else st.session_state.last_data
-                        
-                        # Smart column selection
-                        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-                        string_cols = df.select_dtypes(include=['object', 'string']).columns.tolist()
-                        
-                        if len(numeric_cols) >= 1:
-                            x_col = string_cols[0] if string_cols else df.columns[0]
-                            y_col = numeric_cols[0]
-                            
-                            library = st.session_state.viz_config["library"]
-                            if library.lower() == "altair":
-                                chart = alt.Chart(df).mark_bar().encode(
-                                    x=alt.X(x_col, title=x_col),
-                                    y=alt.Y(y_col, title=y_col),
-                                    color=alt.Color(y_col, scale=alt.Scale(scheme='viridis')),
-                                    tooltip=[x_col, y_col]
-                                ).properties(title="Bar Chart").interactive()
-                                st.altair_chart(chart, width="stretch")
-                            else:
-                                fig = px.bar(df, x=x_col, y=y_col, title="Bar Chart")
-                                st.plotly_chart(fig, width="stretch")
-                        else:
-                            st.error("❌ Bar chart requires numeric data")
-                        
-                        st.success("✅ Bar chart created!")
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
-                else:
-                    st.warning("No data available")
-        
-        with col2:
-            if st.button("� Line Chart", width="stretch"):
-                if st.session_state.last_data is not None:
-                    try:
-                        df = pd.DataFrame(st.session_state.last_data) if isinstance(st.session_state.last_data, list) else st.session_state.last_data
-                        
-                        # Smart column selection for time series
-                        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-                        datetime_cols = df.select_dtypes(include=['datetime64']).columns.tolist()
-                        string_cols = df.select_dtypes(include=['object', 'string']).columns.tolist()
-                        
-                        if len(numeric_cols) >= 1:
-                            x_col = datetime_cols[0] if datetime_cols else (string_cols[0] if string_cols else df.columns[0])
-                            y_col = numeric_cols[0]
-                            
-                            library = st.session_state.viz_config["library"]
-                            if library.lower() == "altair":
-                                chart = alt.Chart(df).mark_line(point=True).encode(
-                                    x=alt.X(x_col, title=x_col),
-                                    y=alt.Y(y_col, title=y_col),
-                                    tooltip=[x_col, y_col]
-                                ).properties(title="Line Chart").interactive()
-                                st.altair_chart(chart, width="stretch")
-                            else:
-                                fig = px.line(df, x=x_col, y=y_col, title="Line Chart")
-                                st.plotly_chart(fig, width="stretch")
-                        else:
-                            st.error("❌ Line chart requires numeric data")
-                        
-                        st.success("✅ Line chart created!")
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
-                else:
-                    st.warning("No data available")
-            
-            if st.button("🔍 Scatter Plot", width="stretch"):
-                if st.session_state.last_data is not None:
-                    try:
-                        df = pd.DataFrame(st.session_state.last_data) if isinstance(st.session_state.last_data, list) else st.session_state.last_data
-                        
-                        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-                        
-                        if len(numeric_cols) >= 2:
-                            library = st.session_state.viz_config["library"]
-                            if library.lower() == "altair":
-                                chart = alt.Chart(df).mark_circle(size=100).encode(
-                                    x=alt.X(numeric_cols[0], title=numeric_cols[0]),
-                                    y=alt.Y(numeric_cols[1], title=numeric_cols[1]),
-                                    tooltip=[numeric_cols[0], numeric_cols[1]]
-                                ).properties(title="Scatter Plot").interactive()
-                                st.altair_chart(chart, width="stretch")
-                            else:
-                                fig = px.scatter(df, x=numeric_cols[0], y=numeric_cols[1], title="Scatter Plot")
-                                st.plotly_chart(fig, width="stretch")
-                        elif len(numeric_cols) >= 1:
-                            string_cols = df.select_dtypes(include=['object', 'string']).columns.tolist()
-                            x_col = string_cols[0] if string_cols else df.columns[0]
-                            y_col = numeric_cols[0]
-                            
-                            library = st.session_state.viz_config["library"]
-                            if library.lower() == "altair":
-                                chart = alt.Chart(df).mark_circle(size=100).encode(
-                                    x=alt.X(x_col, title=x_col),
-                                    y=alt.Y(y_col, title=y_col),
-                                    tooltip=[x_col, y_col]
-                                ).properties(title="Scatter Plot").interactive()
-                                st.altair_chart(chart, width="stretch")
-                            else:
-                                fig = px.scatter(df, x=x_col, y=y_col, title="Scatter Plot")
-                                st.plotly_chart(fig, width="stretch")
-                        else:
-                            st.error("❌ Scatter plot requires numeric data")
-                        
-                        st.success("✅ Scatter plot created!")
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
-                else:
-                    st.warning("No data available")
-        
-        st.markdown("---")
-        
-        # Monthly Data Analysis Section
-        st.markdown("### 📅 Monthly Data Analysis")
-        st.markdown("*Fix for time-based queries that return aggregated instead of monthly data*")
-        
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            year_input = st.selectbox(
-                "Select Year for Monthly Analysis:",
-                options=["2023", "2022", "2024"],
-                index=0
-            )
-        
-        with col2:
-            if st.button("📊 Get Monthly Data", type="secondary", width="stretch"):
-                handle_monthly_data_request(year_input)
-        
-        # Query Builder Section
-        st.markdown("### 🔧 Query Builder")
-        st.markdown("*Build time-dimension queries correctly*")
-        
-        with st.expander("Time Dimension Query Builder", expanded=False):
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                time_dimension = st.text_input(
-                    "Time Dimension:", 
-                    value="sales.order_date",
-                    help="The time dimension field name"
-                )
-                
-                start_date = st.date_input(
-                    "Start Date:",
-                    value=pd.to_datetime("2023-01-01")
-                )
-                
-            with col2:
-                granularity = st.selectbox(
-                    "Granularity:",
-                    options=["month", "week", "day", "quarter", "year"],
-                    index=0
-                )
-                
-                end_date = st.date_input(
-                    "End Date:",
-                    value=pd.to_datetime("2023-12-31")
-                )
-            
-            measure_input = st.text_input(
-                "Measure:",
-                value="sales.total_revenue",
-                help="The measure to aggregate"
-            )
-            
-            if st.button("🚀 Build & Execute Query", type="primary"):
-                # Create the query
-                query = {
-                    "dimensions": [],
-                    "measures": [measure_input],
-                    "timeDimensions": [
-                        {
-                            "dimension": time_dimension,
-                            "dateRange": [start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")],
-                            "granularity": granularity
-                        }
-                    ],
-                    "filters": [],
-                    "limit": 100
-                }
-                
-                st.write("**Generated Query:**")
-                st.json(query)
-                
-                # Copy to clipboard functionality
-                st.code(f"""
-Execute this query in your chat:
-                
-Please execute this query: {json.dumps(query, indent=2)}
-                """)
-                
-                st.info("💡 Copy the query above and paste it in the chat to execute")
-        
-        st.markdown("---")
-        
-        # Data Debugging Section  
-        st.markdown("### 🐛 Data Debugging")
-        if st.session_state.last_data is not None:
-            st.write("**Current Data Structure:**")
-            df = pd.DataFrame(st.session_state.last_data) if isinstance(st.session_state.last_data, list) else st.session_state.last_data
-            st.write(f"Shape: {df.shape}")
-            st.write(f"Columns: {list(df.columns)}")
-            
-            with st.expander("View Raw Data", expanded=False):
-                st.dataframe(df)
-        else:
-            st.info("💡 No data loaded yet. Run a query in the chat to see data here.")
-        
-        # Data Preview
-        if st.session_state.last_data is not None:
-            st.markdown("---")
-            st.subheader("📋 Current Data Preview")
-            
-            # Data info
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Rows", st.session_state.last_data.shape[0])
-            with col2:
-                st.metric("Columns", st.session_state.last_data.shape[1])
-            with col3:
-                numeric_cols = len(st.session_state.last_data.select_dtypes(include=['number']).columns)
-                st.metric("Numeric Cols", numeric_cols)
-            
-            # Data types summary
-            st.markdown("**Column Types:**")
-            dtypes_df = pd.DataFrame({
-                'Column': st.session_state.last_data.columns,
-                'Type': st.session_state.last_data.dtypes.astype(str),
-                'Non-Null': st.session_state.last_data.count()
-            })
-            st.dataframe(dtypes_df, width="stretch", height=200)
-            
-            # Sample data
-            with st.expander("View Sample Data"):
-                st.dataframe(st.session_state.last_data.head(10), width="stretch")
-        else:
-            st.markdown("---")
-            st.info("💡 **Tip**: Run a data query in the chat to load data for visualization")
-            
-            # Show example queries
-            with st.expander("📝 Example Data Queries"):
-                st.markdown("""
-                **Try these example queries in the chat:**
-                
-                • `Show me sales by product category`
-                • `What are the top 10 customers by revenue?`
-                • `Show monthly sales trends for the last year`
-                • `Display product performance metrics`
-                • `Get customer demographics breakdown`
-                
-                After running a query, return to this tab to create visualizations!
-                """)
-    
     # Set default values for variables that need to be accessible outside the tab
     if 'mcp_url' not in locals():
         mcp_url = DEFAULT_MCP_URL
@@ -974,8 +257,6 @@ if "last_query" not in st.session_state:
     st.session_state.last_query = ""
 if "last_response" not in st.session_state:
     st.session_state.last_response = ""
-if "viz_intelligence" not in st.session_state:
-    st.session_state.viz_intelligence = VisualizationIntelligence()
 
 # Forward declarations for functions used in sidebar
 def create_chart_from_sidebar(df, chart_type, library="plotly", title=None):
@@ -1140,7 +421,7 @@ def validate_load_query_args(args):
     return {"query": fixed_query}
 
 def parse_table_from_text(text):
-    """Parse markdown table from assistant response and convert to DataFrame."""
+    """Enhanced table parsing from assistant response and convert to DataFrame."""
     try:
         # Find markdown table pattern
         table_pattern = r'\|.*\|[\r\n]+\|.*\|[\r\n]+(?:\|.*\|[\r\n]+)+'
@@ -1155,103 +436,130 @@ def parse_table_from_text(text):
         if len(lines) < 3:  # Header, separator, at least one data row
             return None
             
-        # Parse header
-        header = [col.strip() for col in lines[0].split('|')[1:-1]]
+        # Parse header - clean up header names
+        header_line = lines[0]
+        header = []
+        for col in header_line.split('|')[1:-1]:  # Remove first and last empty elements
+            clean_header = col.strip()
+            # Handle common header variations
+            if clean_header.lower() in ['product category', 'productcategory']:
+                clean_header = 'Product Category'
+            elif clean_header.lower() in ['average order value', 'averageordervalue']:
+                clean_header = 'Average Order Value'
+            header.append(clean_header)
         
         # Parse data rows (skip separator line)
         data = []
         for line in lines[2:]:
-            row = [col.strip() for col in line.split('|')[1:-1]]
-            if len(row) == len(header):
-                data.append(row)
+            row_data = [col.strip() for col in line.split('|')[1:-1]]
+            if len(row_data) == len(header):
+                data.append(row_data)
         
         if not data:
             return None
             
         df = pd.DataFrame(data, columns=header)
         
-        # Try to convert numeric columns
+        # Enhanced data type conversion
         for col in df.columns:
-            # Check if column contains currency values
+            # Handle currency values (remove $ and commas)
             if df[col].astype(str).str.contains(r'[\$,]').any():
                 df[col] = df[col].astype(str).str.replace(r'[\$,]', '', regex=True)
             
             # Try to convert to numeric
             try:
-                df[col] = pd.to_numeric(df[col])
+                # Check if all values can be converted to float
+                numeric_series = pd.to_numeric(df[col], errors='coerce')
+                if not numeric_series.isna().all():  # If at least some values are numeric
+                    df[col] = numeric_series
             except (ValueError, TypeError):
                 # Try to parse dates
                 try:
-                    df[col] = pd.to_datetime(df[col])
+                    df[col] = pd.to_datetime(df[col], errors='coerce')
                 except:
                     pass  # Keep as string
+        
+        # Log the parsing result
+        print(f"Successfully parsed table with {len(df)} rows and columns: {list(df.columns)}")
+        print(f"Data types: {dict(df.dtypes)}")
+        print(f"Sample data:\n{df.head()}")
         
         return df
         
     except Exception as e:
-        st.error(f"Error parsing table: {e}")
+        print(f"Error parsing table: {e}")
         return None
 
 def create_advanced_chart(df, chart_type="auto", title=None, user_query=""):
-    """Create advanced charts with intelligent recommendations."""
+    """Create advanced charts using LIDA with COMPLETE AUTHORITY for beautiful visualizations."""
     if df is None or df.empty:
         st.warning("No data available for visualization")
         return
-    
+
     try:
-        # Get intelligent recommendations if auto mode
-        if chart_type == "auto" and auto_suggest:
-            recommendations = st.session_state.viz_intelligence.get_chart_recommendations(
-                df, user_query, st.session_state.last_response
-            )
-            
-            if recommendations:
-                with st.expander("🧠 Intelligent Chart Recommendations", expanded=True):
-                    primary_rec = recommendations[0]
-                    st.markdown(f"**Recommended**: {primary_rec.name}")
-                    st.markdown(f"*Why*: {primary_rec.analytical_value}")
-                    
-                    if len(recommendations) > 1:
-                        st.markdown("**Alternatives**:")
-                        for rec in recommendations[1:3]:
-                            st.markdown(f"• {rec.name}: {rec.description}")
-                
-                # Use the primary recommendation
-                chart_type = recommendations[0].chart_type
-        
-        # Chart creation section
-        col1, col2 = st.columns([4, 1])
-        
-        with col2:
-            if show_chart_options:
-                st.markdown("**Chart Options**")
-                
-                # Chart type selection
-                chart_types = ["auto", "bar", "line", "scatter", "area", "heatmap", "pie", "distribution", "boxplot", "violin", "correlation"]
-                selected_chart = st.selectbox("Chart Type:", chart_types, index=0)
-                
-                # Library selection  
-                library_options = ["altair", "plotly", "matplotlib", "seaborn"]
-                selected_library = st.selectbox("Library:", library_options, index=0)
-                
-                if st.button("🎨 Create Chart"):
-                    result = create_beautiful_chart(df, selected_chart, selected_library, user_query=user_query)
-                    st.success(result)
-                    return
-        
-        with col1:
-            if title:
-                st.subheader(f"📊 {title}")
-            else:
-                st.subheader("📊 Data Visualization")
-            
-            # Create the appropriate chart using beautiful chart system
-            result = create_beautiful_chart(df, chart_type, "auto", user_query=user_query)
-                
+        # LIDA FIRST AND ONLY - Give it complete freedom for beauty!
+        if lida_manager:
+            with st.spinner("🎨 LIDA is creating the most beautiful visualization for your data..."):
+                # NO LIBRARY CONSTRAINTS - LIDA chooses the most beautiful approach
+                lida_result = lida_manager.visualize(
+                    data=df,
+                    summary=f"Create the most beautiful, visually appealing, and professional-looking visualization for this data. User query: {user_query}",
+                    # REMOVED: library="altair" - LIDA now has COMPLETE FREEDOM!
+                )
+
+                if lida_result:
+                    st.success("✅ LIDA created a beautiful visualization!")
+
+                    # Check if LIDA returned code that needs preprocessing
+                    if hasattr(lida_result, 'code') and lida_result.code:
+                        logger.info(f"🔍 LIDA chose to generate code: {lida_result.code[:100]}...")
+
+                        # Preprocess the code to handle return statements
+                        clean_code, is_function = preprocess_lida_code(lida_result.code, "df")
+
+                        if clean_code:
+                            try:
+                                # Execute with ALL libraries available for LIDA's beautiful choice
+                                exec_globals = {
+                                    'df': df, 'data': df,
+                                    'pd': pd, 'plt': plt, 'sns': sns,
+                                    'px': px, 'alt': alt, 'np': np,
+                                    'go': go if 'go' in globals() else None,
+                                    'make_subplots': make_subplots if 'make_subplots' in globals() else None,
+                                }
+                                exec(clean_code, exec_globals)
+
+                                # Try to display matplotlib plot
+                                current_fig = plt.gcf()
+                                if current_fig.get_axes():
+                                    st.pyplot(current_fig)
+                                    plt.clf()
+                                else:
+                                    st.warning("No plot was generated")
+                            except Exception as exec_error:
+                                logger.error(f"❌ Execution error: {exec_error}")
+                                st.error(f"Error executing LIDA code: {exec_error}")
+                        else:
+                            st.warning("No valid code generated after preprocessing")
+
+                    # Display the visualization (original LIDA chart if available)
+                    elif hasattr(lida_result, 'chart'):
+                        st.altair_chart(lida_result.chart, width="stretch")
+
+                    # Show LIDA's reasoning
+                    if hasattr(lida_result, 'summary'):
+                        with st.expander("🎨 LIDA's Beautiful Creation", expanded=False):
+                            st.write(lida_result.summary)
+                else:
+                    st.error("❌ LIDA could not create a visualization")
+        else:
+            st.error("❌ LIDA not available. Please check OpenAI API key in Settings.")
+            st.info("💡 LIDA creates the most beautiful and appealing visualizations!")
+
         # Show the underlying data
         with st.expander("📋 View Raw Data"):
-            st.dataframe(df, use_container_width=True)
-            
+            st.dataframe(df, width="stretch")
+
     except Exception as e:
         st.error(f"Error creating chart: {e}")
         st.write("Data preview:")
@@ -1373,348 +681,553 @@ def create_plotly_chart(df, chart_type):
         st.error(f"Error creating {chart_type} chart: {e}")
         st.dataframe(df.head())
 
-# ===============================================================================
-# BEAUTIFUL CHART LIBRARIES FUNCTIONS
-# ===============================================================================
+def get_best_library_for_chart_type(chart_type):
+    """Get the best Python library for each visualization type based on best practices."""
+    library_recommendations = {
+        "bar": "seaborn",           # High-level API, beautiful default styles
+        "line": "matplotlib",       # Flexible, publication-quality, time series
+        "scatter": "plotly",        # Interactivity, zoom, selection
+        "histogram": "seaborn",     # Statistical features, easy syntax
+        "box": "seaborn",          # Statistical features, easy grouping
+        "heatmap": "seaborn",      # Annotated, clustering, color palettes
+        "pie": "plotly",           # Interactive, easy labels
+        "donut": "plotly",         # Interactive, easy labels
+        "area": "plotly",          # Stacked areas, interactivity
+        "violin": "seaborn",       # Statistical, easy grouping
+        "3d": "plotly",            # True 3D support, interactive
+        "treemap": "plotly",       # Hierarchical, interactive
+        "sunburst": "plotly",      # Hierarchical, interactive
+        "facet": "altair",         # Declarative grammar, simple faceting
+        "network": "plotly",       # NetworkX for data, Plotly for visualization
+        "map": "plotly",           # Easy maps, choropleths, scatter geo
+        "statistical": "seaborn",   # Built-in stats, regression, correlation
+        "interactive": "plotly",    # Best overall for interactivity
+        "waterfall": "plotly",     # Good support for waterfall charts
+        "radar": "plotly"          # Good radar chart support
+    }
+    
+    return library_recommendations.get(chart_type.lower(), "plotly")
 
-def create_seaborn_chart(df, chart_type="auto", title=None, user_query=""):
-    """Create beautiful statistical charts with Seaborn."""
+def generate_lida_instructions_and_persona(df, user_query=""):
+    """Generate intelligent instructions and persona for LIDA using LLM."""
+    if not lida_manager:
+        return [], ""
     
-    # Set style for beautiful plots
-    sns.set_style("whitegrid")
-    sns.set_palette("husl")
+    try:
+        # Analyze the data structure
+        data_info = {
+            "columns": list(df.columns),
+            "numeric_cols": df.select_dtypes(include=['number']).columns.tolist(),
+            "categorical_cols": df.select_dtypes(include=['object']).columns.tolist(),
+            "datetime_cols": df.select_dtypes(include=['datetime64']).columns.tolist(),
+            "shape": df.shape,
+            "sample_data": df.head(2).to_dict('records')
+        }
+        
+        # Create instruction generation prompt
+        instruction_prompt = f"""
+Based on this data analysis request and dataset characteristics, generate 2-3 specific visualization instructions:
+
+USER QUERY: "{user_query}"
+
+DATASET INFO:
+- Columns: {data_info['columns']}
+- Numeric columns: {data_info['numeric_cols']}
+- Categorical columns: {data_info['categorical_cols']}
+- Data shape: {data_info['shape']}
+- Sample: {data_info['sample_data']}
+
+Generate 2-3 specific instructions to make the visualization more beautiful and insightful. Focus on:
+1. Visual aesthetics (colors, styling, layout)
+2. Data clarity (labels, formatting, readability)
+3. Professional appearance (titles, legends, annotations)
+
+Return only the instructions as a simple list, one per line, starting with "- ".
+"""
+
+        # Create persona generation prompt
+        persona_prompt = f"""
+Based on this data analysis request, generate a specific persona who would be interested in this visualization:
+
+USER QUERY: "{user_query}"
+DATASET CONTEXT: Data about {', '.join(data_info['columns'][:3])}
+
+Generate a specific persona (role, goals, context) who would want to see this data visualization. 
+Be specific about their role, why they need this data, and what decisions they might make.
+
+Return only the persona description in 1-2 sentences, focusing on their role and data needs.
+"""
+
+        # Generate instructions using OpenAI
+        try:
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            
+            # Generate instructions
+            instructions_response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                temperature=0.7,
+                messages=[{"role": "user", "content": instruction_prompt}],
+                max_tokens=200
+            )
+            
+            instructions_text = instructions_response.choices[0].message.content
+            instructions = [line.strip("- ").strip() for line in instructions_text.split('\n') 
+                          if line.strip() and line.strip().startswith('-')]
+            
+            # Generate persona
+            persona_response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                temperature=0.8,
+                messages=[{"role": "user", "content": persona_prompt}],
+                max_tokens=100
+            )
+            
+            persona = persona_response.choices[0].message.content.strip()
+            
+            logger.info(f"🎭 Generated persona: {persona}")
+            logger.info(f"📝 Generated instructions: {instructions}")
+            
+            return instructions[:3], persona  # Limit to 3 instructions
+            
+        except Exception as llm_error:
+            logger.warning(f"LLM generation failed: {llm_error}")
+            # Fallback to basic instructions
+            return [
+                "use professional color palette with high contrast",
+                "add clear axis labels and title",
+                "ensure the chart is publication-ready with proper formatting"
+            ], f"data analyst interested in {user_query.lower()}"
+            
+    except Exception as e:
+        logger.error(f"Error generating instructions/persona: {e}")
+        return [], ""
+
+def enhanced_visualization_pipeline(df, user_query="", enable_lida=True):
+    """
+    Enhanced visualization pipeline with LIDA having COMPLETE AUTHORITY over library selection
+    for creating the most beautiful and appealing visualizations.
+    """
+    results = {
+        "lida_success": False,
+        "fallback_used": False,
+        "chart_created": False,
+        "chart_description": ""
+    }
     
-    if chart_type == "distribution":
-        # Beautiful distribution plot
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        if numeric_cols:
-            fig, axes = plt.subplots(1, len(numeric_cols[:3]), figsize=(15, 5))
-            if len(numeric_cols[:3]) == 1:
-                axes = [axes]
+    if df is None or df.empty:
+        results["chart_description"] = "No data available"
+        return results
+    
+    # LIDA FIRST AND ONLY CHOICE - Give it complete freedom!
+    if enable_lida and lida_manager is not None:
+        try:
+            logger.info("� LIDA has COMPLETE AUTHORITY to create beautiful visualizations...")
+            logger.info(f"� User query: {user_query}")
             
-            for i, col in enumerate(numeric_cols[:3]):
-                sns.histplot(data=df, x=col, kde=True, ax=axes[i])
-                axes[i].set_title(f'Distribution of {col}')
+            # Create LIDA summary
+            summary = lida_manager.summarize(df)
             
-            plt.tight_layout()
+            # Generate goal - let LIDA choose EVERYTHING (library, chart type, style)
+            if user_query:
+                # Enhanced goal that gives LIDA maximum freedom
+                enhanced_goal = user_query
+                
+                # Only add specific instructions if user explicitly requests a chart type
+                chart_type_keywords = ["pie chart", "bar chart", "line chart", "scatter plot", 
+                                     "histogram", "heatmap", "treemap", "donut chart", "area chart",
+                                     "box plot", "violin plot", "sunburst", "waterfall", "radar"]
+                
+                user_requested_specific_chart = any(keyword in user_query.lower() for keyword in chart_type_keywords)
+                
+                if user_requested_specific_chart:
+                    # User specifically requested a chart type - honor that
+                    if "pie" in user_query.lower():
+                        enhanced_goal += ". Create a beautiful, visually appealing pie chart with proper colors and styling."
+                    elif "bar" in user_query.lower():
+                        enhanced_goal += ". Create a beautiful, visually appealing bar chart with proper colors and styling."
+                    elif "line" in user_query.lower():
+                        enhanced_goal += ". Create a beautiful, visually appealing line chart with proper colors and styling."
+                    elif "scatter" in user_query.lower():
+                        enhanced_goal += ". Create a beautiful, visually appealing scatter plot with proper colors and styling."
+                    elif "histogram" in user_query.lower():
+                        enhanced_goal += ". Create a beautiful, visually appealing histogram with proper colors and styling."
+                    elif "heatmap" in user_query.lower():
+                        enhanced_goal += ". Create a beautiful, visually appealing heatmap with proper colors and styling."
+                    elif "treemap" in user_query.lower():
+                        enhanced_goal += ". Create a beautiful, visually appealing treemap with proper colors and styling."
+                    elif "donut" in user_query.lower():
+                        enhanced_goal += ". Create a beautiful, visually appealing donut chart with proper colors and styling."
+                    elif "area" in user_query.lower():
+                        enhanced_goal += ". Create a beautiful, visually appealing area chart with proper colors and styling."
+                    elif "box" in user_query.lower():
+                        enhanced_goal += ". Create a beautiful, visually appealing box plot with proper colors and styling."
+                    elif "violin" in user_query.lower():
+                        enhanced_goal += ". Create a beautiful, visually appealing violin plot with proper colors and styling."
+                    elif "sunburst" in user_query.lower():
+                        enhanced_goal += ". Create a beautiful, visually appealing sunburst chart with proper colors and styling."
+                    elif "waterfall" in user_query.lower():
+                        enhanced_goal += ". Create a beautiful, visually appealing waterfall chart with proper colors and styling."
+                    elif "radar" in user_query.lower():
+                        enhanced_goal += ". Create a beautiful, visually appealing radar chart with proper colors and styling."
+                    # Add more specific chart types as needed
+                else:
+                    # No specific chart type requested - let LIDA choose completely!
+                    enhanced_goal += ". Create the most beautiful, visually appealing, and professional-looking visualization for this data. Choose the best chart type, library, colors, and styling to make it stunning and insightful."
+                
+                goal = enhanced_goal
+            else:
+                # No user query - let LIDA choose completely
+                goals = lida_manager.goals(summary, n=1)
+                goal = goals[0] if goals else "Create the most beautiful and visually appealing visualization for this data"
+            
+            logger.info(f"� Final goal for LIDA: {goal}")
+            
+            # Generate visualization - LIDA HAS COMPLETE FREEDOM!
+            # NO LIBRARY CONSTRAINTS - LIDA chooses the most beautiful approach
+            visualizations = lida_manager.visualize(summary=summary, goal=goal)
+            
+            if visualizations:
+                for viz in visualizations:
+                    if hasattr(viz, 'code') and viz.code:
+                        # Preprocess and execute - let LIDA's choice shine!
+                        clean_code, is_function = preprocess_lida_code(viz.code, "data")
+                        
+                        if clean_code:
+                            # Execute with ALL libraries available for LIDA's choice
+                            exec_globals = {
+                                'data': df, 'df': df, 'pd': pd, 'plt': plt,
+                                'sns': sns, 'px': px, 'alt': alt, 'np': np,
+                                # Add more libraries if available
+                                'go': go if 'go' in globals() else None,
+                                'make_subplots': make_subplots if 'make_subplots' in globals() else None,
+                            }
+                            
+                            exec(clean_code, exec_globals)
+                            
+                            # Check if plot was created
+                            current_fig = plt.gcf()
+                            if current_fig.get_axes():
+                                st.pyplot(current_fig)
+                                plt.clf()
+                                
+                                results["lida_success"] = True
+                                results["chart_created"] = True
+                                results["chart_description"] = f"LIDA created a beautiful visualization: {goal}"
+                                return results
+                                
+                    elif hasattr(viz, 'chart'):
+                        # LIDA chose Altair - display it beautifully
+                        st.altair_chart(viz.chart, width="stretch")
+                        results["lida_success"] = True
+                        results["chart_created"] = True
+                        results["chart_description"] = f"LIDA created a beautiful Altair visualization: {goal}"
+                        return results
+                        
+        except Exception as e:
+            logger.warning(f"LIDA failed: {e}")
+    
+    # MINIMAL FALLBACK - Only if LIDA is completely unavailable
+    results["fallback_used"] = True
+    logger.info("🔄 LIDA unavailable, using minimal fallback...")
+    
+    try:
+        # Simple, clean fallback - don't compete with LIDA's beauty
+        st.info("💡 For the most beautiful visualizations, please ensure LIDA is properly configured with your OpenAI API key.")
+        
+        # Show data table as clean fallback
+        st.dataframe(df, width="stretch")
+        results["chart_description"] = "Data table displayed (LIDA not available for beautiful visualizations)"
+        
+    except Exception as e:
+        logger.error(f"Minimal fallback failed: {e}")
+        results["chart_description"] = "Unable to display data"
+    
+    return results
+
+def debug_lida_integration(df, user_query=""):
+    """Debug LIDA integration and return diagnostic information."""
+    debug_info = {
+        "success": False,
+        "steps": [],
+        "errors": [],
+        "raw_code": None
+    }
+    
+    try:
+        debug_info["steps"].append("✅ Starting LIDA debug")
+        
+        if lida_manager is None:
+            debug_info["errors"].append("❌ LIDA manager not initialized")
+            return debug_info
+        
+        debug_info["steps"].append("✅ LIDA manager available")
+        
+        # Test summary generation
+        try:
+            summary = lida_manager.summarize(df)
+            debug_info["steps"].append("✅ Summary generated")
+        except Exception as e:
+            debug_info["errors"].append(f"❌ Summary generation failed: {e}")
+            return debug_info
+        
+        # Test goal generation
+        try:
+            goals = lida_manager.goals(summary, n=1)
+            goal = goals[0] if goals else user_query or "Show data distribution"
+            debug_info["steps"].append("✅ Goals generated")
+        except Exception as e:
+            debug_info["errors"].append(f"❌ Goal generation failed: {e}")
+            return debug_info
+        
+        # Test visualization generation
+        try:
+            visualizations = lida_manager.visualize(summary=summary, goal=goal)
+            debug_info["steps"].append("✅ Visualizations generated")
+            
+            if visualizations:
+                viz = visualizations[0]
+                if hasattr(viz, 'code') and viz.code:
+                    debug_info["raw_code"] = viz.code
+                    debug_info["steps"].append("✅ Code extracted from visualization")
+                    
+                    # Test preprocessing
+                    try:
+                        clean_code, is_function = preprocess_lida_code(viz.code, "data")
+                        debug_info["steps"].append("✅ Code preprocessing successful")
+                        
+                        if clean_code:
+                            debug_info["steps"].append("✅ Clean code generated")
+                            
+                            # Test execution
+                            try:
+                                exec_globals = {
+                                    'data': df, 'df': df, 'pd': pd, 'plt': plt,
+                                    'sns': sns, 'px': px, 'alt': alt, 'np': np
+                                }
+                                exec(clean_code, exec_globals)
+                                debug_info["steps"].append("✅ Code execution successful")
+                                debug_info["success"] = True
+                                
+                            except Exception as e:
+                                debug_info["errors"].append(f"❌ Code execution failed: {e}")
+                        else:
+                            debug_info["errors"].append("❌ No clean code generated")
+                            
+                    except Exception as e:
+                        debug_info["errors"].append(f"❌ Code preprocessing failed: {e}")
+                else:
+                    debug_info["errors"].append("❌ No code in visualization")
+            else:
+                debug_info["errors"].append("❌ No visualizations generated")
+                
+        except Exception as e:
+            debug_info["errors"].append(f"❌ Visualization generation failed: {e}")
+            
+    except Exception as e:
+        debug_info["errors"].append(f"❌ Unexpected error: {e}")
+    
+    return debug_info
+
+def create_simple_fallback_chart(df):
+    """Create a simple fallback chart when LIDA fails."""
+    try:
+        import plotly.express as px
+        import plotly.graph_objects as go
+        
+        print(f"Creating fallback chart for DataFrame with columns: {list(df.columns)}")
+        print(f"Data types: {dict(df.dtypes)}")
+        
+        # Find numeric and categorical columns
+        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+        categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
+        
+        print(f"Numeric columns: {numeric_cols}")
+        print(f"Categorical columns: {categorical_cols}")
+        
+        # Create appropriate chart based on data structure
+        if len(categorical_cols) >= 1 and len(numeric_cols) >= 1:
+            # Bar chart: categorical vs numeric
+            fig = px.bar(
+                df, 
+                x=categorical_cols[0], 
+                y=numeric_cols[0],
+                title=f"{numeric_cols[0]} by {categorical_cols[0]}"
+            )
+            # Fix: Use update_layout instead of update_xaxis for tickangle
+            fig.update_layout(xaxis_tickangle=45)
             return fig
-    
-    elif chart_type == "correlation":
-        # Beautiful correlation heatmap
-        numeric_df = df.select_dtypes(include=[np.number])
-        if len(numeric_df.columns) > 1:
-            corr_matrix = numeric_df.corr()
-            mask = np.triu(np.ones_like(corr_matrix, dtype=bool))
             
-            fig, ax = plt.subplots(figsize=(10, 8))
-            sns.heatmap(corr_matrix, mask=mask, annot=True, cmap='coolwarm', 
-                       center=0, square=True, linewidths=.5, ax=ax)
-            plt.title('Correlation Matrix')
+        elif len(numeric_cols) >= 2:
+            # Scatter plot: numeric vs numeric
+            fig = px.scatter(
+                df,
+                x=numeric_cols[0],
+                y=numeric_cols[1],
+                title=f"{numeric_cols[1]} vs {numeric_cols[0]}"
+            )
             return fig
-    
-    elif chart_type == "scatter":
-        # Beautiful scatter plot with regression
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        if len(numeric_cols) >= 2:
-            fig, ax = plt.subplots(figsize=(10, 6))
-            sns.regplot(data=df, x=numeric_cols[0], y=numeric_cols[1], 
-                       scatter_kws={'alpha':0.6}, line_kws={'color': 'red'}, ax=ax)
-            plt.title(f'{numeric_cols[1]} vs {numeric_cols[0]} with Trend Line')
+            
+        elif len(numeric_cols) == 1:
+            # Histogram for single numeric column
+            fig = px.histogram(
+                df,
+                x=numeric_cols[0],
+                title=f"Distribution of {numeric_cols[0]}"
+            )
             return fig
-    
-    elif chart_type == "boxplot":
-        # Beautiful box plot
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
-        
-        if numeric_cols and categorical_cols:
-            fig, ax = plt.subplots(figsize=(12, 6))
-            sns.boxplot(data=df, x=categorical_cols[0], y=numeric_cols[0], ax=ax)
-            sns.stripplot(data=df, x=categorical_cols[0], y=numeric_cols[0], 
-                         color='black', alpha=0.5, ax=ax)
-            plt.xticks(rotation=45)
-            plt.title(f'{numeric_cols[0]} Distribution by {categorical_cols[0]}')
-            plt.tight_layout()
-            return fig
-    
-    elif chart_type == "violin":
-        # Beautiful violin plot
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
-        
-        if numeric_cols and categorical_cols:
-            fig, ax = plt.subplots(figsize=(12, 6))
-            sns.violinplot(data=df, x=categorical_cols[0], y=numeric_cols[0], ax=ax)
-            plt.xticks(rotation=45)
-            plt.title(f'{numeric_cols[0]} Distribution by {categorical_cols[0]}')
-            plt.tight_layout()
-            return fig
-    
-    return None
-
-def create_altair_chart(df, chart_type="auto", title=None, user_query=""):
-    """Create beautiful interactive charts with Altair."""
-    
-    if chart_type == "line":
-        # Beautiful interactive line chart
-        date_cols = [col for col in df.columns if 'date' in col.lower() or 'time' in col.lower()]
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        
-        if date_cols and numeric_cols:
-            chart = alt.Chart(df).mark_line(point=True).encode(
-                x=alt.X(date_cols[0], title=date_cols[0]),
-                y=alt.Y(numeric_cols[0], title=numeric_cols[0]),
-                tooltip=[date_cols[0], numeric_cols[0]]
-            ).properties(
-                width=600,
-                height=400,
-                title=title or f"{numeric_cols[0]} Over Time"
-            ).interactive()
             
-            return chart
-    
-    elif chart_type == "bar":
-        # Beautiful interactive bar chart
-        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        
-        if categorical_cols and numeric_cols:
-            chart = alt.Chart(df).mark_bar().encode(
-                x=alt.X(categorical_cols[0], sort='-y', title=categorical_cols[0]),
-                y=alt.Y(numeric_cols[0], title=numeric_cols[0]),
-                color=alt.Color(categorical_cols[0], legend=None),
-                tooltip=[categorical_cols[0], numeric_cols[0]]
-            ).properties(
-                width=600,
-                height=400,
-                title=title or f"{numeric_cols[0]} by {categorical_cols[0]}"
-            ).interactive()
-            
-            return chart
-    
-    elif chart_type == "scatter":
-        # Beautiful interactive scatter plot
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        
-        if len(numeric_cols) >= 2:
-            chart = alt.Chart(df).mark_circle(size=60).encode(
-                x=alt.X(numeric_cols[0], title=numeric_cols[0]),
-                y=alt.Y(numeric_cols[1], title=numeric_cols[1]),
-                color=alt.Color(numeric_cols[0], scale=alt.Scale(scheme='viridis')),
-                tooltip=list(df.columns)
-            ).properties(
-                width=600,
-                height=400,
-                title=title or f"{numeric_cols[1]} vs {numeric_cols[0]}"
-            ).interactive()
-            
-            return chart
-    
-    elif chart_type == "area":
-        # Beautiful interactive area chart
-        date_cols = [col for col in df.columns if 'date' in col.lower() or 'time' in col.lower()]
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        
-        if date_cols and numeric_cols:
-            chart = alt.Chart(df).mark_area(opacity=0.7).encode(
-                x=alt.X(date_cols[0], title=date_cols[0]),
-                y=alt.Y(numeric_cols[0], title=numeric_cols[0]),
-                color=alt.value('#1f77b4'),
-                tooltip=[date_cols[0], numeric_cols[0]]
-            ).properties(
-                width=600,
-                height=400,
-                title=title or f"Area Chart: {numeric_cols[0]}"
-            ).interactive()
-            
-            return chart
-    
-    return None
-
-def create_bokeh_chart(df, chart_type="auto", title=None, user_query=""):
-    """Create beautiful interactive charts with Bokeh."""
-    
-    if not BOKEH_AVAILABLE:
-        return None
-    
-    source = ColumnDataSource(df)
-    
-    if chart_type == "line":
-        date_cols = [col for col in df.columns if 'date' in col.lower() or 'time' in col.lower()]
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        
-        if date_cols and numeric_cols:
-            p = figure(width=600, height=400, title=title or f"{numeric_cols[0]} Over Time",
-                      x_axis_type='datetime')
-            
-            p.line(x=date_cols[0], y=numeric_cols[0], source=source, 
-                  line_width=2, color='#2E86AB', legend_label=numeric_cols[0])
-            p.circle(x=date_cols[0], y=numeric_cols[0], source=source, 
-                    size=6, color='#A23B72', alpha=0.8)
-            
-            p.add_tools(HoverTool(tooltips=[
-                (date_cols[0], f"@{date_cols[0]}{{%F}}"),
-                (numeric_cols[0], f"@{numeric_cols[0]}{{0.2f}}")
-            ]))
-            
-            return p
-    
-    elif chart_type == "bar":
-        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        
-        if categorical_cols and numeric_cols:
-            p = figure(width=600, height=400, title=title or f"{numeric_cols[0]} by {categorical_cols[0]}",
-                      x_range=df[categorical_cols[0]].unique())
-            
-            p.vbar(x=categorical_cols[0], top=numeric_cols[0], source=source,
-                  width=0.8, color=factor_cmap(categorical_cols[0], palette=Category20[20], 
-                                             factors=df[categorical_cols[0]].unique()))
-            
-            p.add_tools(HoverTool(tooltips=[
-                (categorical_cols[0], f"@{categorical_cols[0]}"),
-                (numeric_cols[0], f"@{numeric_cols[0]}{{0.2f}}")
-            ]))
-            
-            p.xaxis.major_label_orientation = 45
-            return p
-    
-    elif chart_type == "scatter":
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        
-        if len(numeric_cols) >= 2:
-            p = figure(width=600, height=400, title=title or f"{numeric_cols[1]} vs {numeric_cols[0]}")
-            
-            p.scatter(x=numeric_cols[0], y=numeric_cols[1], source=source,
-                     size=8, alpha=0.8, color='#2E86AB')
-            
-            p.add_tools(HoverTool(tooltips=[
-                (numeric_cols[0], f"@{numeric_cols[0]}{{0.2f}}"),
-                (numeric_cols[1], f"@{numeric_cols[1]}{{0.2f}}")
-            ]))
-            
-            return p
-    
-    return None
-
-def display_seaborn_chart(fig):
-    """Display Seaborn chart in Streamlit."""
-    if fig:
-        buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=300, bbox_inches='tight')
-        buf.seek(0)
-        st.image(buf, use_column_width=True)
-        plt.close(fig)  # Clean up memory
-
-def display_bokeh_chart(p):
-    """Display Bokeh chart in Streamlit."""
-    if p:
-        html = file_html(p, CDN, "chart")
-        st.components.v1.html(html, height=450)
-
-def create_beautiful_chart(df, chart_type="auto", library="altair", title=None, user_query=""):
-    """Choose the best library for beautiful charts based on data and requirements."""
-    
-    if library == "auto":
-        # Auto-select library based on chart type and data
-        if chart_type in ["distribution", "correlation", "boxplot", "violin"]:
-            library = "seaborn"  # Statistical plots
-        elif chart_type in ["line", "bar", "scatter", "area"]:
-            library = "altair"   # Interactive and clean
-        elif chart_type == "heatmap":
-            library = "plotly"   # Complex interactions
         else:
-            library = "plotly"   # Default
+            # Fallback: show data summary as text
+            return None
+            
+    except Exception as e:
+        print(f"Error creating fallback chart: {e}")
+        return None
+
+def run_lida_diagnostics():
+    """Run comprehensive LIDA diagnostics."""
+    st.markdown("### 🔍 LIDA Integration Diagnostics")
     
-    # Show library selection
-    st.info(f"🎨 Creating {chart_type} chart with {library.title()}")
+    # Test 1: LIDA availability
+    if lida_manager is None:
+        st.error("❌ LIDA Manager is not initialized")
+        if not os.getenv("OPENAI_API_KEY"):
+            st.error("❌ OPENAI_API_KEY not found in environment")
+        else:
+            st.info("✅ OPENAI_API_KEY found")
+        return False
+    else:
+        st.success("✅ LIDA Manager initialized")
     
-    # Create chart with selected library
-    if library == "seaborn":
-        fig = create_seaborn_chart(df, chart_type, title, user_query)
-        if fig:
-            display_seaborn_chart(fig)
-            return f"✅ Created beautiful {chart_type} chart with Seaborn"
+    # Test 2: Create sample data
+    sample_df = pd.DataFrame({
+        'Category': ['A', 'B', 'C', 'D'],
+        'Value': [10, 20, 15, 25],
+        'Score': [0.8, 0.6, 0.9, 0.7]
+    })
     
-    elif library == "altair":
-        chart = create_altair_chart(df, chart_type, title, user_query)
-        if chart:
-            st.altair_chart(chart, use_container_width=True)
-            return f"✅ Created interactive {chart_type} chart with Altair"
+    st.write("**Sample Data:**")
+    st.dataframe(sample_df)
     
-    elif library == "bokeh" and BOKEH_AVAILABLE:
-        p = create_bokeh_chart(df, chart_type, title, user_query)
-        if p:
-            display_bokeh_chart(p)
-            return f"✅ Created interactive {chart_type} chart with Bokeh"
+    # Test 3: Run debug pipeline
+    st.write("**Running Debug Pipeline:**")
+    debug_info = debug_lida_integration(sample_df, "Show category performance")
     
-    else:  # Default to Plotly
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**Steps Completed:**")
+        for step in debug_info.get("steps", []):
+            st.write(f"  {step}")
+    
+    with col2:
+        st.write("**Errors Found:**")
+        for error in debug_info.get("errors", []):
+            st.write(f"  {error}")
+    
+    # Test 4: Show raw code if available
+    if debug_info.get("raw_code"):
+        st.write("**Generated Code:**")
+        st.code(debug_info["raw_code"], language="python")
+        
+        # Analyze the code
+        code_issues = []
+        if "return" in debug_info["raw_code"]:
+            code_issues.append("⚠️ Contains return statements")
+        if ";" in debug_info["raw_code"]:
+            code_issues.append("⚠️ Contains semicolons")
+        if not any(lib in debug_info["raw_code"] for lib in ['plt', 'px', 'alt', 'sns']):
+            code_issues.append("⚠️ No recognized plotting library")
+        
+        if code_issues:
+            st.write("**Code Issues:**")
+            for issue in code_issues:
+                st.write(f"  {issue}")
+        else:
+            st.success("✅ Code looks syntactically correct")
+    
+    return debug_info.get("success", False)
+
+def show_manual_chart_options(df):
+    """Show manual chart creation options as a fallback."""
+    st.markdown("### 🛠️ Manual Chart Options")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        chart_type = st.selectbox(
+            "Chart Type",
+            ["bar", "line", "scatter", "pie", "histogram", "box", "heatmap"],
+            help="Select the type of chart to create"
+        )
+    
+    with col2:
+        library = st.selectbox(
+            "Chart Library",
+            ["plotly", "altair"],
+            help="Choose the visualization library"
+        )
+    
+    if st.button("🎨 Create Chart"):
+        if library == "plotly":
+            fig = create_plotly_chart(df, chart_type)
+            if fig:
+                st.plotly_chart(fig, use_container_width=True)
+                st.success(f"✅ Created {chart_type} chart with Plotly")
+        elif library == "altair":
+            # Simple Altair charts
+            try:
+                numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+                categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+                
+                if chart_type == "bar" and categorical_cols and numeric_cols:
+                    chart = alt.Chart(df).mark_bar().encode(
+                        x=categorical_cols[0],
+                        y=numeric_cols[0]
+                    ).properties(width=600, height=400)
+                    st.altair_chart(chart, use_container_width=True)
+                elif chart_type == "scatter" and len(numeric_cols) >= 2:
+                    chart = alt.Chart(df).mark_circle().encode(
+                        x=numeric_cols[0],
+                        y=numeric_cols[1]
+                    ).properties(width=600, height=400)
+                    st.altair_chart(chart, use_container_width=True)
+                else:
+                    st.warning("Chart type not supported with current data structure")
+            except Exception as e:
+                st.error(f"Error creating Altair chart: {e}")
+
+def create_simple_chart(df, chart_type="auto"):
+    """Create simple charts as fallback when LIDA is not available."""
+    try:
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+        
+        if chart_type == "auto":
+            # Auto-select based on data
+            if len(numeric_cols) >= 2:
+                chart_type = "scatter"
+            elif numeric_cols and categorical_cols:
+                chart_type = "bar"
+            elif numeric_cols:
+                chart_type = "histogram"
+            else:
+                chart_type = "bar"
+        
+        # Create simple Plotly chart
         fig = create_plotly_chart(df, chart_type)
         if fig:
             st.plotly_chart(fig, use_container_width=True)
-            return f"✅ Created interactive {chart_type} chart with Plotly"
-    
-    return "❌ Could not create visualization"
+            return f"✅ Created simple {chart_type} chart"
+        else:
+            st.warning("Could not create chart with available data")
+            return None
+            
+    except Exception as e:
+        st.error(f"Error creating simple chart: {e}")
+        return None
 
 # ===============================================================================
-
-def detect_chart_request(user_message):
-    """Detect if user is requesting a chart/visualization."""
-    analysis = analyze_query_for_chart_type(user_message)
-    return analysis['has_chart_request'] or analysis['is_generic_request']
-
-def extract_chart_type(user_message):
-    """Extract requested chart type from user message."""
-    analysis = analyze_query_for_chart_type(user_message)
-    if analysis['requested_types']:
-        return analysis['requested_types'][0]  # Return first requested type
-    return 'auto'
-
-def detect_new_data_request(user_message):
-    """Detect if user is asking for different data dimensions/measures that require a new query."""
-    
-    # Keywords that suggest new data requirements
-    product_keywords = ['product', 'category', 'brand', 'item', 'merchandise']
-    customer_keywords = ['customer', 'client', 'user', 'demographics', 'location', 'city', 'state']
-    revenue_keywords = ['revenue', 'income', 'earnings', 'profit', 'money']
-    time_keywords = ['monthly', 'quarterly', 'yearly', 'daily', 'trends', 'over time']
-    
-    user_lower = user_message.lower()
-    
-    # Check if asking for product-related data
-    if any(keyword in user_lower for keyword in product_keywords):
-        # If current data doesn't have product columns, need new query
-        if st.session_state.last_data is None:
-            return True
-        current_columns = str(st.session_state.last_data.columns).lower()
-        if not any(keyword in current_columns for keyword in ['product', 'category', 'brand']):
-            return True
-    
-    # Check if asking for customer-related data  
-    if any(keyword in user_lower for keyword in customer_keywords):
-        if st.session_state.last_data is None:
-            return True
-        current_columns = str(st.session_state.last_data.columns).lower()
-        if not any(keyword in current_columns for keyword in ['customer', 'client', 'city', 'state']):
-            return True
-    
-    # Check if asking for revenue when we only have sales count
-    if any(keyword in user_lower for keyword in revenue_keywords):
-        if st.session_state.last_data is None:
-            return True
-        current_columns = str(st.session_state.last_data.columns).lower()
-        if 'revenue' not in current_columns and 'total_revenue' not in current_columns:
-            return True
-    
-    # Check if asking for time-based analysis
-    if any(keyword in user_lower for keyword in time_keywords):
-        if st.session_state.last_data is None:
-            return True
-        current_columns = str(st.session_state.last_data.columns).lower()
-        if not any(keyword in current_columns for keyword in ['date', 'month', 'quarter', 'year', 'time']):
-            return True
-    
-    return False
 
 # UI: tool refresh + clear chat + schema info
 col1, col2, col3, col4 = st.columns(4)
@@ -1745,12 +1258,7 @@ with col3:
         st.info(f"**Current Endpoint**: {schema_type}\n\n**URL**: {endpoint_url}")
 with col4:
     if st.button("🎯 Get Smart Suggestions") and st.session_state.last_data is not None:
-        suggestions = get_smart_visualization_suggestions(
-            st.session_state.last_data, 
-            st.session_state.last_query,
-            st.session_state.last_response
-        )
-        st.info(suggestions)
+        st.info("Smart suggestions are now handled automatically by LIDA when you query data!")
 
 # Auto-load once
 if st.session_state.oai_tools is None:
@@ -1847,32 +1355,14 @@ CRITICAL: Always use get_metadata tool first to discover available fields before
 Your current endpoint supports dynamic schema detection. The schema could be sales360, customer360, or other variants.
 Adapt your field names based on what you discover in the metadata."""
 
-# OpenAI agent turn
 def agent_turn(user_text: str) -> str:
     if not OPENAI_API_KEY:
         raise RuntimeError("Missing OPENAI_API_KEY in .env")
 
     client = OpenAI(api_key=OPENAI_API_KEY)
     
-    # Store the query for intelligent recommendations
+    # Store the query for LIDA visualization
     st.session_state.last_query = user_text
-
-    # Check if user is requesting a chart
-    if detect_chart_request(user_text):
-        chart_type = extract_chart_type(user_text)
-        
-        # Check if user is asking for different data that requires a new query
-        if detect_new_data_request(user_text):
-            # Don't create chart yet, let the system fetch new data first
-            st.info("🔍 Detected request for different data. I'll fetch the appropriate data first, then create your visualization.")
-        else:
-            # If we have previous data, create chart immediately
-            if st.session_state.last_data is not None:
-                create_advanced_chart(st.session_state.last_data, chart_type, 
-                                    user_query=st.session_state.last_query)
-                return f"I've created a {chart_type} chart based on the previous data. The visualization is displayed above with intelligent recommendations!"
-            else:
-                return "I don't have any recent tabular data to visualize. Please run a query that returns data first, then ask for a chart."
 
     # Build chat history for OpenAI
     msgs = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
@@ -1955,22 +1445,31 @@ def agent_turn(user_text: str) -> str:
 
     final_response = followup.choices[0].message.content or "(no response)"
     
-    # Store response for intelligent recommendations
+    # Store response for potential visualization
     st.session_state.last_response = final_response
     
-    # Store data for potential visualization
+    # Parse data from response and create LIDA visualization
     df = parse_table_from_text(final_response)
     if df is not None:
         st.session_state.last_data = df
         
-        # Auto-create visualization if enabled
+        # Auto-create LIDA visualization if enabled
         if auto_suggest:
-            create_advanced_chart(df, "auto", user_query=user_text)
+            st.markdown("---")
+            st.markdown("### 🤖 LIDA Auto-Visualization")
+            result = enhanced_visualization_pipeline(df, user_query=user_text)
+            if result:
+                st.success(result)
+            else:
+                # Fallback to simple chart
+                st.info("Falling back to simple visualization...")
+                create_simple_chart(df, "auto")
 
     return final_response
 
 # Input box
-user_msg = st.chat_input("Ask anything. I'll pick a tool, run it, and provide intelligent visualizations.")
+# Input box
+user_msg = st.chat_input("Ask anything. I'll pick a tool, run it, and provide beautiful visualizations with LIDA's intelligent enhancements, personas, and best library selection.")
 if user_msg:
     st.session_state.messages.append({"role": "user", "content": user_msg})
     with st.chat_message("user"):
@@ -1979,9 +1478,104 @@ if user_msg:
     with st.chat_message("assistant"):
         placeholder = st.empty()
         try:
-            with st.spinner("Analyzing your query and preparing intelligent recommendations..."):
+            with st.spinner("🎨 Analyzing your query and creating beautiful visualizations..."):
                 time.sleep(0.25)
-                reply = agent_turn(user_msg)
+                
+                # Check if this is a visualization request with existing data
+                chart_request_keywords = [
+                    "pie chart", "bar chart", "line chart", "scatter plot", "histogram",
+                    "box plot", "heatmap", "treemap", "donut chart", "area chart",
+                    "bubble chart", "violin plot", "sunburst", "waterfall", "radar",
+                    "show me", "create", "generate", "make", "display", "visualize",
+                    "beautiful", "appealing", "stunning", "professional"
+                ]
+                
+                is_viz_request = any(keyword in user_msg.lower() for keyword in chart_request_keywords)
+                
+                if is_viz_request and st.session_state.last_data is not None:
+                    # This is a visualization request with existing data
+                    st.markdown("### 🎨 Creating Beautiful Visualization")
+                    
+                    # Determine chart type from user request
+                    chart_type = "auto"  # Default to auto - let LIDA choose!
+                    user_requested_specific = False
+                    
+                    if "pie" in user_msg.lower():
+                        chart_type = "pie"
+                        user_requested_specific = True
+                    elif "bar" in user_msg.lower():
+                        chart_type = "bar"
+                        user_requested_specific = True
+                    elif "line" in user_msg.lower():
+                        chart_type = "line"
+                        user_requested_specific = True
+                    elif "scatter" in user_msg.lower():
+                        chart_type = "scatter"
+                        user_requested_specific = True
+                    elif "histogram" in user_msg.lower():
+                        chart_type = "histogram"
+                        user_requested_specific = True
+                    elif "heatmap" in user_msg.lower():
+                        chart_type = "heatmap"
+                        user_requested_specific = True
+                    elif "treemap" in user_msg.lower():
+                        chart_type = "treemap"
+                        user_requested_specific = True
+                    elif "donut" in user_msg.lower():
+                        chart_type = "donut"
+                        user_requested_specific = True
+                    elif "area" in user_msg.lower():
+                        chart_type = "area"
+                        user_requested_specific = True
+                    elif "bubble" in user_msg.lower():
+                        chart_type = "bubble"
+                        user_requested_specific = True
+                    elif "box" in user_msg.lower():
+                        chart_type = "box"
+                        user_requested_specific = True
+                    elif "violin" in user_msg.lower():
+                        chart_type = "violin"
+                        user_requested_specific = True
+                    elif "sunburst" in user_msg.lower():
+                        chart_type = "sunburst"
+                        user_requested_specific = True
+                    elif "waterfall" in user_msg.lower():
+                        chart_type = "waterfall"
+                        user_requested_specific = True
+                    elif "radar" in user_msg.lower():
+                        chart_type = "radar"
+                        user_requested_specific = True
+                    
+                    # LIDA HAS COMPLETE AUTHORITY for beautiful visualizations
+                    if user_requested_specific:
+                        # User wants a specific chart type - honor that request
+                        enhanced_query = f"Create a beautiful, visually appealing {chart_type} chart showing {user_msg}"
+                        st.info(f"� Creating beautiful {chart_type} chart as requested...")
+                    else:
+                        # Let LIDA choose the most beautiful visualization
+                        enhanced_query = f"Create the most beautiful, visually appealing, and professional-looking visualization for: {user_msg}"
+                        st.info("� LIDA has complete authority to create the most beautiful visualization...")
+                    
+                    result = enhanced_visualization_pipeline(
+                        st.session_state.last_data, 
+                        user_query=enhanced_query, 
+                        enable_lida=True
+                    )
+                    
+                    if result and result.get("chart_created"):
+                        if user_requested_specific:
+                            reply = f"✅ Created beautiful {chart_type} chart! {result.get('chart_description', '')}"
+                        else:
+                            reply = f"✅ LIDA created a stunning visualization! {result.get('chart_description', '')}"
+                    else:
+                        # Minimal fallback - encourage LIDA usage
+                        st.info("💡 For the most beautiful visualizations, please ensure LIDA is properly configured with your OpenAI API key.")
+                        st.dataframe(st.session_state.last_data, width="stretch")
+                        reply = "📊 Data table displayed (LIDA not available for beautiful visualizations)"
+                else:
+                    # Regular query processing
+                    reply = agent_turn(user_msg)
+                
             placeholder.markdown(reply)
             st.session_state.messages.append({"role": "assistant", "content": reply})
         except Exception as e:
