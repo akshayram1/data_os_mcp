@@ -1,0 +1,1180 @@
+{
+    "name": "public:customer360-v1",
+    "title": "public:customer360-v1",
+    "description": "This semantic model provides comprehensive insights into customer behavior, demographics, and purchasing patterns, enabling a 360-degree view of customer interactions and engagement.",
+    "tags": [
+        "lens"
+    ],
+    "authors": [
+        "deepakjaiswal"
+    ],
+    "timeZones": [
+        "UTC"
+    ],
+    "runtime": {
+        "devMode": false,
+        "version": "0.35.60-39",
+        "build": "07/28/2025 17:30:47 +0530"
+    },
+    "source": {
+        "type": "postgres",
+        "dialect": "postgres",
+        "connection": "dataos://ecomdata",
+        "meta": {
+            "database": "postgres",
+            "host": "modern-postgresql-server.postgres.database.azure.com",
+            "port": 5432,
+            "depot": {
+                "depot": "ecomdata",
+                "type": "jdbc",
+                "external": true,
+                "isArchived": false,
+                "source": "ecomdata",
+                "secrets": [
+                    {
+                        "id": "ecomdata_r_r",
+                        "acl": "r",
+                        "type": "key-value-properties",
+                        "provider": "HEIMDALL"
+                    },
+                    {
+                        "id": "ecomdata_rw_rw",
+                        "acl": "rw",
+                        "type": "key-value-properties",
+                        "provider": "HEIMDALL"
+                    }
+                ],
+                "jdbc": {
+                    "subprotocol": "postgresql",
+                    "host": "modern-postgresql-server.postgres.database.azure.com",
+                    "port": 5432,
+                    "database": "postgres"
+                },
+                "resolution": {
+                    "url": "jdbc:postgresql://modern-postgresql-server.postgres.database.azure.com:5432/postgres",
+                    "database": "postgres"
+                }
+            }
+        }
+    },
+    "tables": [
+        {
+            "name": "customer",
+            "type": "table",
+            "title": "Customer",
+            "sql": "`select * , ntile(4) over (ORDER BY total_rev DESC) as quartiles from (SELECT customer.customer_id,\n  first_name,\n  last_name,\n  email,\n  phone_number,\n  activation_date,\n  address,\n  city,\n  customer.state,\n  zip_code,\n  country,\n  customer.status,\n  customer.premise,\n  customer.delivery_day,\n  customer.delivery_frequency,\n  customer.license,\n  customer.license_deactivation,\n  customer.primary_warehouse_id,\n  customer.created_at,\n  customer.updated_at,\n  sum(total_price) over (partition by customer.customer_id) as total_rev\nFROM public.customer as customer\nleft join  public.sales as sales ON customer.customer_id = sales.customer_id) as t`",
+            "isVisible": true,
+            "public": true,
+            "description": "This table stores key details about the customers, including their personal information, income, and classification into different risk segments. It serves as the central reference point for customer-related insights.",
+            "connectedComponent": 1,
+            "measures": [
+                {
+                    "name": "customer.total_customers",
+                    "title": "Customer Total Customers",
+                    "description": "The total number of customers in the dataset, used as a basic measure of customer volume.",
+                    "shortTitle": "Total Customers",
+                    "cumulativeTotal": false,
+                    "cumulative": false,
+                    "type": "number",
+                    "aggType": "countDistinct",
+                    "drillMembers": [],
+                    "drillMembersGrouped": {
+                        "measures": [],
+                        "dimensions": []
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "sql": "`${TABLE.customer_id}`",
+                    "isGoverned": false,
+                    "refs": [
+                        "customer.customer_id"
+                    ]
+                }
+            ],
+            "dimensions": [
+                {
+                    "name": "customer.customer_id",
+                    "title": "Customer Customer Id",
+                    "type": "string",
+                    "description": "The unique identifier for each customer.",
+                    "shortTitle": "Customer Id",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": true,
+                    "sql": "`customer_id`",
+                    "isGoverned": false,
+                    "refs": [
+                        "customer_id"
+                    ]
+                },
+                {
+                    "name": "customer.first_name",
+                    "title": "Customer First Name",
+                    "type": "string",
+                    "description": "The first name of the customer.",
+                    "shortTitle": "First Name",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`first_name`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.last_name",
+                    "title": "Customer Last Name",
+                    "type": "string",
+                    "description": "The last name of the customer.",
+                    "shortTitle": "Last Name",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`last_name`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.email",
+                    "title": "Customer Email",
+                    "type": "string",
+                    "description": "The email address of the customer for communication and notifications.",
+                    "shortTitle": "Email",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`email`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.phone_number",
+                    "title": "Customer Phone Number",
+                    "type": "string",
+                    "description": "The contact phone number of the customer.",
+                    "shortTitle": "Phone Number",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`phone_number`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.activation_date",
+                    "title": "Customer Activation Date",
+                    "type": "time",
+                    "description": "The birth date of the customer, used for age verification and segmentation.",
+                    "shortTitle": "Activation Date",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`activation_date`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.address",
+                    "title": "Customer Address",
+                    "type": "string",
+                    "description": "The street address of the customer.",
+                    "shortTitle": "Address",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`address`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.city",
+                    "title": "Customer City",
+                    "type": "string",
+                    "description": "The city where the customer resides.",
+                    "shortTitle": "City",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`city`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.state",
+                    "title": "Customer State",
+                    "type": "string",
+                    "description": "The state or region of the customer’s residence.",
+                    "shortTitle": "State",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`state`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.zip_code",
+                    "title": "Customer Zip Code",
+                    "type": "string",
+                    "description": "The postal zip code of the customer's address.",
+                    "shortTitle": "Zip Code",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`zip_code`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.country",
+                    "title": "Customer Country",
+                    "type": "string",
+                    "description": "The country where the customer is located.",
+                    "shortTitle": "Country",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`country`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.quartiles",
+                    "title": "Customer Quartiles",
+                    "type": "number",
+                    "shortTitle": "Quartiles",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`quartiles`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.total_rev",
+                    "title": "Customer Total Rev",
+                    "type": "number",
+                    "shortTitle": "Total Rev",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`total_rev`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.status",
+                    "title": "Customer Status",
+                    "type": "string",
+                    "description": "The current status of the customer (e.g., active, inactive).",
+                    "shortTitle": "Status",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`status`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.premise",
+                    "title": "Customer Premise",
+                    "type": "string",
+                    "description": "Indicates whether the customer operates on-premise, off-premise, or both.",
+                    "shortTitle": "Premise",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`premise`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.delivery_day",
+                    "title": "Customer Delivery Day",
+                    "type": "string",
+                    "description": "The preferred day of the week for deliveries.",
+                    "shortTitle": "Delivery Day",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`delivery_day`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.delivery_frequency",
+                    "title": "Customer Delivery Frequency",
+                    "type": "string",
+                    "description": "The frequency of deliveries, such as daily, weekly, bi-weekly, or monthly.",
+                    "shortTitle": "Delivery Frequency",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`delivery_frequency`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.license",
+                    "title": "Customer License",
+                    "type": "string",
+                    "description": "The type of license held by the customer, such as Wine, Liquor, or Spirit.",
+                    "shortTitle": "License",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`license`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.license_deactivation",
+                    "title": "Customer License Deactivation",
+                    "type": "time",
+                    "description": "The date when the customer's license is deactivated.",
+                    "shortTitle": "License Deactivation",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`license_deactivation`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.primary_warehouse_id",
+                    "title": "Customer Primary Warehouse Id",
+                    "type": "string",
+                    "description": "The ID of the primary warehouse assigned to the customer.",
+                    "shortTitle": "Primary Warehouse Id",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`primary_warehouse_id`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.created_at",
+                    "title": "Customer Created at",
+                    "type": "time",
+                    "description": "The date and time when the customer record was created.",
+                    "shortTitle": "Created at",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`created_at`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.updated_at",
+                    "title": "Customer Updated at",
+                    "type": "time",
+                    "description": "The date and time when the customer record was last updated.",
+                    "shortTitle": "Updated at",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`updated_at`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "customer.next_delivery_date",
+                    "title": "Customer Next Delivery Date",
+                    "type": "time",
+                    "description": "The date of the next scheduled delivery.",
+                    "shortTitle": "Next Delivery Date",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`CAST(\n    CURRENT_DATE + INTERVAL '1 day' * \n    (((CASE ${TABLE.delivery_day}\n        WHEN 'Mon' THEN 1 WHEN 'Tue' THEN 2 WHEN 'Wed' THEN 3 \n        WHEN 'Thu' THEN 4 WHEN 'Fri' THEN 5 WHEN 'Sat' THEN 6 WHEN 'Sun' THEN 7 \n      END \n    - (EXTRACT(DOW FROM CURRENT_DATE) % 7) + 7) % 7) \n    + CASE \n        WHEN ((CASE ${TABLE.delivery_day}\n            WHEN 'Mon' THEN 1 WHEN 'Tue' THEN 2 WHEN 'Wed' THEN 3 \n            WHEN 'Thu' THEN 4 WHEN 'Fri' THEN 5 WHEN 'Sat' THEN 6 WHEN 'Sun' THEN 7 \n          END \n        - (EXTRACT(DOW FROM CURRENT_DATE) % 7) + 7) % 7) > 1 \n        THEN 0 ELSE 7 \n      END\n    ) AS TIMESTAMP)\n`",
+                    "isGoverned": false,
+                    "refs": [
+                        "customer.delivery_day"
+                    ]
+                }
+            ],
+            "segments": [],
+            "hierarchies": [],
+            "fileName": "tables/customer.yml",
+            "joins": [
+                {
+                    "relationship": "hasMany",
+                    "sql": "`${TABLE.customer_id}= ${sales.customer_id}`",
+                    "name": "sales"
+                },
+                {
+                    "relationship": "hasMany",
+                    "sql": "`${TABLE.customer_id}= ${proposal.customer_id}`",
+                    "name": "proposal"
+                }
+            ]
+        },
+        {
+            "name": "proposal",
+            "type": "table",
+            "title": "Proposal",
+            "sql": "`SELECT proposal_id,\n    customer_id,\n    product_id,\n    proposal_date,\n    proposed_price,\n    proposal_status,\n    created_at,\n    updated_at \nFROM public.proposal`",
+            "isVisible": true,
+            "public": true,
+            "description": "This table stores key details about proposals, including proposed prices, customer associations, and proposal statuses. It serves as the central reference point for tracking and managing product proposals.",
+            "connectedComponent": 1,
+            "measures": [
+                {
+                    "name": "proposal.total_proposal",
+                    "title": "Proposal Total Proposal",
+                    "description": "The total number of proposal in the dataset.",
+                    "shortTitle": "Total Proposal",
+                    "cumulativeTotal": false,
+                    "cumulative": false,
+                    "type": "number",
+                    "aggType": "countDistinct",
+                    "drillMembers": [],
+                    "drillMembersGrouped": {
+                        "measures": [],
+                        "dimensions": []
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "sql": "`${TABLE.proposal_id}`",
+                    "isGoverned": false,
+                    "refs": [
+                        "proposal.proposal_id"
+                    ]
+                }
+            ],
+            "dimensions": [
+                {
+                    "name": "proposal.proposal_id",
+                    "title": "Proposal Proposal Id",
+                    "type": "string",
+                    "description": "The unique identifier for each proposal.",
+                    "shortTitle": "Proposal Id",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": true,
+                    "sql": "`proposal_id`",
+                    "isGoverned": false,
+                    "refs": [
+                        "proposal_id"
+                    ]
+                },
+                {
+                    "name": "proposal.customer_id",
+                    "title": "Proposal Customer Id",
+                    "type": "string",
+                    "description": "The identifier for the customer associated with the proposal.",
+                    "shortTitle": "Customer Id",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`customer_id`",
+                    "isGoverned": false,
+                    "refs": [
+                        "customer_id"
+                    ]
+                },
+                {
+                    "name": "proposal.product_id",
+                    "title": "Proposal Product Id",
+                    "type": "string",
+                    "description": "The identifier for the product being proposed.",
+                    "shortTitle": "Product Id",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`product_id`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "proposal.proposal_date",
+                    "title": "Proposal Proposal Date",
+                    "type": "time",
+                    "description": "The date when the proposal was created.",
+                    "shortTitle": "Proposal Date",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`proposal_date`",
+                    "isGoverned": false,
+                    "refs": [
+                        "proposal_date"
+                    ]
+                },
+                {
+                    "name": "proposal.proposed_price",
+                    "title": "Proposal Proposed Price",
+                    "type": "number",
+                    "description": "The price proposed for the product in the proposal.",
+                    "shortTitle": "Proposed Price",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`proposed_price`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "proposal.proposal_status",
+                    "title": "Proposal Proposal Status",
+                    "type": "string",
+                    "description": "The current status of the proposal (e.g., pending, accepted, rejected).",
+                    "shortTitle": "Proposal Status",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`proposal_status`",
+                    "isGoverned": false,
+                    "refs": [
+                        "proposal_status"
+                    ]
+                },
+                {
+                    "name": "proposal.created_at",
+                    "title": "Proposal Created at",
+                    "type": "time",
+                    "description": "The date and time when the proposal record was created.",
+                    "shortTitle": "Created at",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`created_at`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "proposal.updated_at",
+                    "title": "Proposal Updated at",
+                    "type": "time",
+                    "description": "The date and time when the proposal record was last updated.",
+                    "shortTitle": "Updated at",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`updated_at`",
+                    "isGoverned": false,
+                    "refs": []
+                }
+            ],
+            "segments": [],
+            "hierarchies": [],
+            "fileName": "tables/proposal.yml",
+            "joins": []
+        },
+        {
+            "name": "sales",
+            "type": "table",
+            "title": "Sales",
+            "sql": "`SELECT sales_id,\n    customer_id,\n    product_id,\n    order_id,\n    order_date,\n    quantity,\n    unit_price,\n    discount,\n    total_price,\n    payment_method,\n    status,\n    source,\n    premise,\n    created_at,\n    updated_at\nFROM public.sales`",
+            "isVisible": true,
+            "public": true,
+            "description": "This table stores key details about sales transactions, including order details, customer purchases, pricing, and payment methods. It serves as the central reference point for tracking and managing sales activities.",
+            "connectedComponent": 1,
+            "measures": [
+                {
+                    "name": "sales.total_sales",
+                    "title": "Sales Total Sales",
+                    "description": "The total number of sales in the dataset.",
+                    "shortTitle": "Total Sales",
+                    "cumulativeTotal": false,
+                    "cumulative": false,
+                    "type": "number",
+                    "aggType": "countDistinct",
+                    "drillMembers": [],
+                    "drillMembersGrouped": {
+                        "measures": [],
+                        "dimensions": []
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "sql": "`${TABLE.sales_id}`",
+                    "isGoverned": false,
+                    "refs": [
+                        "sales.sales_id"
+                    ]
+                },
+                {
+                    "name": "sales.total_products_sold",
+                    "title": "Sales Total Products Sold",
+                    "description": "The total quantity of products sold.",
+                    "shortTitle": "Total Products Sold",
+                    "cumulativeTotal": false,
+                    "cumulative": false,
+                    "type": "number",
+                    "aggType": "sum",
+                    "drillMembers": [],
+                    "drillMembersGrouped": {
+                        "measures": [],
+                        "dimensions": []
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "sql": "`${TABLE.quantity}`",
+                    "isGoverned": false,
+                    "refs": [
+                        "sales.quantity"
+                    ]
+                },
+                {
+                    "name": "sales.average_order_value",
+                    "title": "Sales Average Order Value",
+                    "description": "The average value of an order.",
+                    "shortTitle": "Average Order Value",
+                    "cumulativeTotal": false,
+                    "cumulative": false,
+                    "type": "number",
+                    "aggType": "avg",
+                    "drillMembers": [],
+                    "drillMembersGrouped": {
+                        "measures": [],
+                        "dimensions": []
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "sql": "`${TABLE.total_price}`",
+                    "isGoverned": false,
+                    "refs": [
+                        "sales.total_price"
+                    ]
+                },
+                {
+                    "name": "sales.online_revenue",
+                    "title": "Sales Online Revenue",
+                    "description": "Total online revenue.",
+                    "shortTitle": "Online Revenue",
+                    "cumulativeTotal": false,
+                    "cumulative": false,
+                    "type": "number",
+                    "aggType": "sum",
+                    "drillMembers": [],
+                    "drillMembersGrouped": {
+                        "measures": [],
+                        "dimensions": []
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "sql": "`case when ${TABLE.source} = 'Online' then ${TABLE.total_price} else 0 end`",
+                    "isGoverned": false,
+                    "refs": [
+                        "sales.source",
+                        "sales.total_price"
+                    ]
+                },
+                {
+                    "name": "sales.offline_revenue",
+                    "title": "Sales Offline Revenue",
+                    "description": "Total Offline revenue.",
+                    "shortTitle": "Offline Revenue",
+                    "cumulativeTotal": false,
+                    "cumulative": false,
+                    "type": "number",
+                    "aggType": "sum",
+                    "drillMembers": [],
+                    "drillMembersGrouped": {
+                        "measures": [],
+                        "dimensions": []
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "sql": "`case when ${TABLE.source} = 'Offline' then ${TABLE.total_price} else 0 end`",
+                    "isGoverned": false,
+                    "refs": [
+                        "sales.source",
+                        "sales.total_price"
+                    ]
+                },
+                {
+                    "name": "sales.total_revenue",
+                    "title": "Sales Total Revenue",
+                    "description": "The total revenue generated from sales.",
+                    "shortTitle": "Total Revenue",
+                    "cumulativeTotal": false,
+                    "cumulative": false,
+                    "type": "number",
+                    "aggType": "sum",
+                    "drillMembers": [],
+                    "drillMembersGrouped": {
+                        "measures": [],
+                        "dimensions": []
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "sql": "`${TABLE.quantity} * ${TABLE.total_price}`",
+                    "isGoverned": false,
+                    "refs": [
+                        "sales.quantity",
+                        "sales.total_price"
+                    ]
+                }
+            ],
+            "dimensions": [
+                {
+                    "name": "sales.sales_id",
+                    "title": "Sales Sales Id",
+                    "type": "string",
+                    "description": "The unique identifier for each sales transaction.",
+                    "shortTitle": "Sales Id",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": true,
+                    "sql": "`sales_id`",
+                    "isGoverned": false,
+                    "refs": [
+                        "sales_id"
+                    ]
+                },
+                {
+                    "name": "sales.customer_id",
+                    "title": "Sales Customer Id",
+                    "type": "string",
+                    "description": "The identifier for the customer associated with the sale.",
+                    "shortTitle": "Customer Id",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`customer_id`",
+                    "isGoverned": false,
+                    "refs": [
+                        "customer_id"
+                    ]
+                },
+                {
+                    "name": "sales.product_id",
+                    "title": "Sales Product Id",
+                    "type": "string",
+                    "description": "The identifier for the product sold.",
+                    "shortTitle": "Product Id",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`product_id`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "sales.order_id",
+                    "title": "Sales Order Id",
+                    "type": "string",
+                    "description": "The identifier for the order related to the sale.",
+                    "shortTitle": "Order Id",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`order_id`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "sales.order_date",
+                    "title": "Sales Order Date",
+                    "type": "time",
+                    "description": "The date when the order was placed.",
+                    "shortTitle": "Order Date",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`order_date`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "sales.quantity",
+                    "title": "Sales Quantity",
+                    "type": "number",
+                    "description": "The quantity of the product sold in the transaction.",
+                    "shortTitle": "Quantity",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`quantity`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "sales.unit_price",
+                    "title": "Sales Unit Price",
+                    "type": "number",
+                    "description": "The price per unit of the product at the time of sale.",
+                    "shortTitle": "Unit Price",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`unit_price`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "sales.discount",
+                    "title": "Sales Discount",
+                    "type": "number",
+                    "description": "The discount applied to the sale, if any.",
+                    "shortTitle": "Discount",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`discount`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "sales.total_price",
+                    "title": "Sales Total Price",
+                    "type": "number",
+                    "description": "The total price after applying discounts.",
+                    "shortTitle": "Total Price",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`total_price`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "sales.payment_method",
+                    "title": "Sales Payment Method",
+                    "type": "string",
+                    "description": "The method of payment used for the transaction (e.g., credit card, cash, PayPal).",
+                    "shortTitle": "Payment Method",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`payment_method`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "sales.status",
+                    "title": "Sales Status",
+                    "type": "string",
+                    "description": "The current status of the sale (e.g., completed, pending, refunded).",
+                    "shortTitle": "Status",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`status`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "sales.source",
+                    "title": "Sales Source",
+                    "type": "string",
+                    "description": "The origin of the customer's order, such as online, phone, or in-store.",
+                    "shortTitle": "Source",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`source`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "sales.premise",
+                    "title": "Sales Premise",
+                    "type": "string",
+                    "description": "Indicates whether the customer operates on-premise, off-premise, or both.",
+                    "shortTitle": "Premise",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`premise`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "sales.created_at",
+                    "title": "Sales Created at",
+                    "type": "time",
+                    "description": "The date and time when the sales record was created.",
+                    "shortTitle": "Created at",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`created_at`",
+                    "isGoverned": false,
+                    "refs": []
+                },
+                {
+                    "name": "sales.updated_at",
+                    "title": "Sales Updated at",
+                    "type": "time",
+                    "description": "The date and time when the sales record was last updated.",
+                    "shortTitle": "Updated at",
+                    "suggestFilterValues": true,
+                    "meta": {
+                        "__secured": false,
+                        "secured": false
+                    },
+                    "isVisible": true,
+                    "public": true,
+                    "primaryKey": false,
+                    "sql": "`updated_at`",
+                    "isGoverned": false,
+                    "refs": []
+                }
+            ],
+            "segments": [],
+            "hierarchies": [],
+            "fileName": "tables/sales.yml",
+            "joins": []
+        }
+    ],
+    "securityContext": {
+        "userId": "sahilsasane",
+        "tags": [
+            "roles:id:data-dev",
+            "roles:id:system-dev",
+            "roles:id:user",
+            "users:id:sahilsasane"
+        ],
+        "userGroup": "default",
+        "scopes": [
+            "meta",
+            "data",
+            "graphql",
+            "jobs",
+            "source"
+        ],
+        "_token": "dGVzdF90ZXN0X3NvcGhvcy4zM2Q3ZjYzZS1lOTRiLTRkYjgtYjQ0NS05YWY4YTY3Y2JlYWY="
+    },
+    "userGroups": [
+        {
+            "name": "default",
+            "api_scopes": [
+                "meta",
+                "data",
+                "graphql",
+                "jobs",
+                "source"
+            ],
+            "includes": "*",
+            "allow_private_members_access": false
+        }
+    ]
+}

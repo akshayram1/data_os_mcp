@@ -1,17 +1,24 @@
-import os
-import json
 import inspect
-from typing import Dict, Any, Optional, List
+import os
+from typing import Any, Dict, List, Optional
+
+from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+
 from data_products.lens_utils import LensUtils
 
+load_dotenv()
 
 # Initialize MCP server with HTTP transport, host/port will be set later
 PORT = int(os.environ.get("PORT", 8000))
 mcp = FastMCP("dataos-lens", host="0.0.0.0", port=PORT)
 
 # In-memory storage for credentials (per server instance)
-_session_config = {}
+_session_config = {
+    "lens_api_url": os.environ.get("LENS_API_URL"),
+    "lens_api_secret": os.environ.get("LENS_API_SECRET"),
+}
+
 
 def _get_configured_credentials() -> tuple[Optional[str], Optional[str]]:
     """Get stored credentials."""
@@ -19,21 +26,22 @@ def _get_configured_credentials() -> tuple[Optional[str], Optional[str]]:
     secret = _session_config.get("lens_api_secret")
     return lens_url, secret
 
+
 def validate_and_fix_load_query(query_dict):
     """
     Validate and fix common issues with load query structure.
     """
     if not isinstance(query_dict, dict):
         return {"error": "Query must be a dictionary"}
-    
+
     # Ensure required keys exist with proper defaults
     fixed_query = {
         "dimensions": query_dict.get("dimensions", []),
         "measures": query_dict.get("measures", []),
         "filters": query_dict.get("filters", []),
-        "limit": query_dict.get("limit", 100)
+        "limit": query_dict.get("limit", 100),
     }
-    
+
     # Validate dimensions and measures are lists
     if not isinstance(fixed_query["dimensions"], list):
         fixed_query["dimensions"] = []
@@ -41,24 +49,22 @@ def validate_and_fix_load_query(query_dict):
         fixed_query["measures"] = []
     if not isinstance(fixed_query["filters"], list):
         fixed_query["filters"] = []
-    
+
     # Ensure limit is an integer
     try:
         fixed_query["limit"] = int(fixed_query["limit"])
     except (ValueError, TypeError):
         fixed_query["limit"] = 100
-    
+
     # Validation: Must have at least one measure
     if not fixed_query["measures"]:
         return {"error": "Query must include at least one measure"}
-    
+
     return fixed_query
 
+
 @mcp.tool()
-def configure_dataos(
-    lens_api_url: str,
-    lens_api_secret: str
-) -> Dict[str, Any]:
+def configure_dataos() -> Dict[str, Any]:
     """
     Configure DataOS credentials. Call this once when setting up the client.
     Args:
@@ -70,8 +76,9 @@ def configure_dataos(
     try:
         # Test connection first
         import requests
-        meta_url = f"{lens_api_url.rstrip('/')}/meta"
-        headers = {"apikey": lens_api_secret}
+
+        meta_url = f"{_session_config['lens_api_url'].rstrip('/')}/meta"
+        headers = {"apikey": _session_config["lens_api_secret"]}
         response = requests.get(meta_url, headers=headers, timeout=10)
 
         # Debugging output for troubleshooting
@@ -82,7 +89,7 @@ def configure_dataos(
 
         # If 401, try with Authorization Bearer header
         if response.status_code == 401:
-            headers = {"Authorization": f"Bearer {lens_api_secret}"}
+            headers = {"Authorization": f"Bearer {_session_config['lens_api_secret']}"}
             response = requests.get(meta_url, headers=headers, timeout=10)
             print("Retry with Bearer header. Response code:", response.status_code)
             print("Response body:", response.text[:250])
@@ -90,30 +97,27 @@ def configure_dataos(
         if response.status_code != 200:
             return {
                 "success": False,
-                "error": f"Connection test failed: HTTP {response.status_code} {response.text[:200]}"
+                "error": f"Connection test failed: HTTP {response.status_code} {response.text[:200]}",
             }
 
         # Store credentials in memory and prefer Bearer auth for queries
-        _session_config["lens_api_url"] = lens_api_url.rstrip("/")
-        _session_config["lens_api_secret"] = lens_api_secret
+        _session_config["lens_api_url"] = _session_config["lens_api_url"].rstrip("/")
+        _session_config["lens_api_secret"] = _session_config["lens_api_secret"]
         # Use Authorization: Bearer <secret> for /load POSTs per project convention
         _session_config["auth_header_type"] = "bearer"
 
         return {
             "success": True,
             "message": "DataOS credentials configured successfully",
-            "lens_url": lens_api_url
+            "lens_url": _session_config["lens_api_url"],
         }
     except Exception as e:
-        return {
-            "success": False,
-            "error": f"Configuration failed: {str(e)}"
-        }
+        return {"success": False, "error": f"Configuration failed: {str(e)}"}
+
 
 @mcp.tool()
 def get_metadata(
-    include_schema: bool = True,
-    include_dimensions: bool = False
+    include_schema: bool = True, include_dimensions: bool = False
 ) -> Dict[str, Any]:
     """
     Fetch metadata from DataOS Lens2 /meta endpoint using configured credentials.
@@ -131,6 +135,7 @@ def get_metadata(
         }
     try:
         import requests
+
         meta_url = f"{lens_url}/meta"
         if auth_type == "apikey":
             headers = {"apikey": secret}
@@ -159,26 +164,22 @@ def get_metadata(
     except Exception as e:
         return {"error": str(e)}
 
+
 @mcp.tool()
 def get_connection_status() -> Dict[str, Any]:
     """Check if DataOS credentials are configured and working."""
     lens_url, secret = _get_configured_credentials()
     if not lens_url or not secret:
-        return {
-            "configured": False,
-            "message": "No credentials configured"
-        }
+        return {"configured": False, "message": "No credentials configured"}
     return {
         "configured": True,
         "lens_url": lens_url,
-        "message": "Credentials are configured"
+        "message": "Credentials are configured",
     }
 
+
 @mcp.tool()
-def execute_graphql(
-    query: str,
-    variables: Optional[dict] = None
-) -> Dict[str, Any]:
+def execute_graphql(query: str, variables: Optional[dict] = None) -> Dict[str, Any]:
     """
     Execute a GraphQL query against the configured Lens `/graphql` endpoint.
     Args:
@@ -189,13 +190,16 @@ def execute_graphql(
     """
     lens_url, secret = _get_configured_credentials()
     if not lens_url or not secret:
-        return {"error": "DataOS not configured. Please call configure_dataos() first with your credentials."}
+        return {
+            "error": "DataOS not configured. Please call configure_dataos() first with your credentials."
+        }
     try:
         lens_utils = LensUtils(lensurl=lens_url, secret=secret)
         result = lens_utils.execute_graphql(query, variables, auth_type="bearer")
         return {"success": True, "data": result}
     except Exception as e:
         return {"error": str(e)}
+
 
 @mcp.tool()
 def execute_load_query(query: dict) -> Dict[str, Any]:
@@ -214,52 +218,59 @@ def execute_load_query(query: dict) -> Dict[str, Any]:
     """
     lens_url, secret = _get_configured_credentials()
     if not lens_url or not secret:
-        return {"error": "DataOS not configured. Please call configure_dataos() first with your credentials."}
-    
+        return {
+            "error": "DataOS not configured. Please call configure_dataos() first with your credentials."
+        }
+
     # Validate and fix query structure
     validated_query = validate_and_fix_load_query(query)
     if "error" in validated_query:
         return validated_query
-    
+
     try:
-        import requests
         import json
-        
+
+        import requests
+
         # Convert validated query dict to JSON string
         query_json = json.dumps(validated_query)
-        
+
         # Build the load URL with query parameter
         load_url = f"{lens_url}/load"
-        
+
         # Get auth type from session config
         auth_type = _session_config.get("auth_header_type", "apikey")
         if auth_type == "bearer":
             headers = {"Authorization": f"Bearer {secret}"}
         else:
             headers = {"apikey": secret}
-        
+
         # Add content type for JSON
         headers["Content-Type"] = "application/json"
-        
+
         # Make the request with query as URL parameter
         params = {"query": query_json}
         response = requests.get(load_url, headers=headers, params=params, timeout=120)
-        
+
         print("Requesting URL:", load_url)
         print("Validated Query:", validated_query)
         print("Query params:", params)
-        print("Using headers:", {k: v if k != "Authorization" else "***" for k, v in headers.items()})
+        print(
+            "Using headers:",
+            {k: v if k != "Authorization" else "***" for k, v in headers.items()},
+        )
         print("Response code:", response.status_code)
         print("Response body:", response.text[:500])
-        
+
         if response.status_code != 200:
             return {"error": f"HTTP {response.status_code}: {response.text[:200]}"}
-        
+
         data = response.json()
         return {"success": True, "data": data, "query_used": validated_query}
-        
+
     except Exception as e:
         return {"error": str(e)}
+
 
 @mcp.tool()
 def list_tools() -> Dict[str, Any]:
@@ -278,6 +289,7 @@ def list_tools() -> Dict[str, Any]:
                 # call the method; it may return a coroutine
                 candidate = mcp.list_tools()
                 import asyncio
+
                 if inspect.iscoroutine(candidate):
                     candidate = asyncio.run(candidate)
 
@@ -287,12 +299,15 @@ def list_tools() -> Dict[str, Any]:
                     return res
                 if isinstance(res, (list, tuple)):
                     import re
+
                     normalized = []
                     for item in res:
                         name = None
                         desc = ""
                         if isinstance(item, dict):
-                            name = item.get("name") or item.get("id") or item.get("tool")
+                            name = (
+                                item.get("name") or item.get("id") or item.get("tool")
+                            )
                             desc = item.get("description", "")
                         else:
                             # try common attributes
@@ -301,7 +316,12 @@ def list_tools() -> Dict[str, Any]:
                                 if name:
                                     break
                             # description candidates
-                            desc = getattr(item, "description", None) or getattr(item, "doc", None) or getattr(item, "__doc__", None) or ""
+                            desc = (
+                                getattr(item, "description", None)
+                                or getattr(item, "doc", None)
+                                or getattr(item, "__doc__", None)
+                                or ""
+                            )
                             # fallback: parse repr like "name='foo'"
                             if not name:
                                 s = repr(item)
@@ -310,7 +330,12 @@ def list_tools() -> Dict[str, Any]:
                                     name = m.group(1)
                         if not name:
                             name = str(item)
-                        normalized.append({"name": str(name), "description": str(desc) if desc else ""})
+                        normalized.append(
+                            {
+                                "name": str(name),
+                                "description": str(desc) if desc else "",
+                            }
+                        )
                     return {"tools": normalized}
             except Exception:
                 # If the MCP's method fails, continue to fallback methods
@@ -321,7 +346,11 @@ def list_tools() -> Dict[str, Any]:
         pass
 
     # Try common registry attributes used by MCP implementations
-    registry = getattr(mcp, "tools", None) or getattr(mcp, "_tools", None) or getattr(mcp, "registry", None)
+    registry = (
+        getattr(mcp, "tools", None)
+        or getattr(mcp, "_tools", None)
+        or getattr(mcp, "registry", None)
+    )
     if registry:
         # If registry is dict-like
         if isinstance(registry, dict):
@@ -344,7 +373,9 @@ def list_tools() -> Dict[str, Any]:
                         continue
                     desc = ""
                     if callable(meta):
-                        desc = (meta.__doc__ or "").splitlines()[0] if meta.__doc__ else ""
+                        desc = (
+                            (meta.__doc__ or "").splitlines()[0] if meta.__doc__ else ""
+                        )
                     elif isinstance(meta, dict):
                         desc = meta.get("description", "")
                     else:
@@ -358,11 +389,16 @@ def list_tools() -> Dict[str, Any]:
     if not tools:
         for nm, obj in globals().items():
             if inspect.isfunction(obj):
-                if getattr(obj, "__mcp_tool__", False) or getattr(obj, "_mcp_tool", False) or getattr(obj, "_is_mcp_tool", False):
+                if (
+                    getattr(obj, "__mcp_tool__", False)
+                    or getattr(obj, "_mcp_tool", False)
+                    or getattr(obj, "_is_mcp_tool", False)
+                ):
                     desc = (obj.__doc__ or "").splitlines()[0] if obj.__doc__ else ""
                     tools.append({"name": nm, "description": desc})
 
     return {"tools": tools}
+
 
 # Run the server
 if __name__ == "__main__":
